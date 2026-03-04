@@ -1,0 +1,22 @@
+# .gitignore — shto këto nëse mungojnë
+.env
+.env.local
+.env.production
+.env.staging
+
+# Vercel
+.vercel
+
+# Next.js
+.next/
+out/
+
+# Dependencies
+node_modules/
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
