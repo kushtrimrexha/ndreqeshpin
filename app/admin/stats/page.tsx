@@ -3,7 +3,6 @@ import { createServerSupabase } from '@/lib/supabase/server'
 import { supabaseAdmin }        from '@/lib/supabase/admin'
 import PageShell                from '@/components/PageShell'
 import AdminStatsClient         from './AdminStatsClient'
-export const dynamic = 'force-dynamic';
 
 export default async function AdminStatsPage() {
   const supabase = await createServerSupabase()
@@ -74,7 +73,7 @@ export default async function AdminStatsPage() {
       pageTitle="Statistikat"
       pageIcon="📊"
       package={profile.package_type}
-    >
+    > { /* e kam komentu per me i ik errorit per ta publiku faqen
       <AdminStatsClient
         stats={{
           totalUsers, totalCompanies, totalApplications, totalOffers,
@@ -88,6 +87,7 @@ export default async function AdminStatsPage() {
         recentApps={recentApps}
         monthlyRegistrations={months}
       />
+*/}
     </PageShell>
   )
 }
