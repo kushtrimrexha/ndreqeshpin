@@ -1,0 +1,65 @@
+/* NdreqeShpin — globals.css */
+/* Place in: app/globals.css */
+
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;0,9..40,800;1,9..40,400&family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,700;0,9..144,900;1,9..144,300;1,9..144,400;1,9..144,700&family=Fira+Code:wght@400;500;700&display=swap');
+
+*,*::before,*::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:#0a0908; --surface:rgba(240,236,228,0.03); --border:rgba(240,236,228,0.07);
+  --text:#f0ece4; --muted:rgba(240,236,228,0.45); --dim:rgba(240,236,228,0.25);
+  --orange:#e8621a; --teal:#22d3a5; --blue:#3b82f6;
+  --purple:#a78bfa; --yellow:#fbbf24; --red:#ef4444; --green:#10b981;
+  --font-d:'Fraunces',Georgia,serif; --font-b:'DM Sans','Helvetica Neue',sans-serif; --font-m:'Fira Code',monospace;
+}
+
+html { scroll-behavior:smooth; -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale; }
+body { background:var(--bg); color:var(--text); font-family:var(--font-b); min-height:100vh; overflow-x:hidden; line-height:1.6; }
+
+::-webkit-scrollbar { width:4px; height:4px; }
+::-webkit-scrollbar-track { background:transparent; }
+::-webkit-scrollbar-thumb { background:rgba(240,236,228,0.1); border-radius:4px; }
+::-webkit-scrollbar-thumb:hover { background:rgba(240,236,228,0.18); }
+::selection { background:rgba(232,98,26,0.3); color:#f0ece4; }
+:focus-visible { outline:2px solid var(--orange); outline-offset:2px; border-radius:8px; }
+
+h1,h2,h3,h4,h5,h6 { font-family:var(--font-d); font-weight:900; letter-spacing:-0.03em; line-height:1.1; }
+a { color:var(--orange); text-decoration:none; transition:opacity 0.15s; }
+a:hover { opacity:0.8; }
+code,pre,kbd { font-family:var(--font-m); }
+
+@keyframes fadeUp    { from{opacity:0;transform:translateY(14px)} to{opacity:1;transform:translateY(0)} }
+@keyframes fadeIn    { from{opacity:0} to{opacity:1} }
+@keyframes scaleIn   { from{opacity:0;transform:scale(0.95)} to{opacity:1;transform:scale(1)} }
+@keyframes slideUp   { from{opacity:0;transform:translateY(10px)} to{opacity:1;transform:translateY(0)} }
+@keyframes slideIn   { from{transform:translateX(-100%)} to{transform:translateX(0)} }
+@keyframes spin      { to{transform:rotate(360deg)} }
+@keyframes pulse     { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.5;transform:scale(0.9)} }
+@keyframes shimmer   { 0%{background-position:200% center} 100%{background-position:-200% center} }
+@keyframes float     { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-8px)} }
+@keyframes glow      { 0%,100%{box-shadow:0 0 20px rgba(232,98,26,0.2)} 50%{box-shadow:0 0 40px rgba(232,98,26,0.45)} }
+@keyframes drift     { 0%,100%{transform:translate(0,0)} 33%{transform:translate(5px,-7px)} 66%{transform:translate(-4px,4px)} }
+@keyframes marquee   { from{transform:translateX(0)} to{transform:translateX(-50%)} }
+@keyframes toastIn   { from{opacity:0;transform:translateY(20px) scale(0.95)} to{opacity:1;transform:translateY(0) scale(1)} }
+@keyframes toastOut  { from{opacity:1;transform:translateY(0) scale(1)} to{opacity:0;transform:translateY(20px) scale(0.95)} }
+@keyframes searchIn  { from{opacity:0;transform:scale(0.96) translateY(-8px)} to{opacity:1;transform:scale(1) translateY(0)} }
+@keyframes overlayIn { from{opacity:0} to{opacity:1} }
+@keyframes barLoad   { 0%{width:0%} 60%{width:75%} 100%{width:100%} }
+@keyframes logoSpin  { to{transform:rotate(360deg)} }
+@keyframes bounce    { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-6px)} }
+
+.skeleton {
+  background:linear-gradient(90deg,rgba(240,236,228,0.04) 25%,rgba(240,236,228,0.08) 50%,rgba(240,236,228,0.04) 75%);
+  background-size:200% auto;
+  animation:shimmer 1.6s linear infinite;
+  border-radius:8px;
+}
+.animate-fadeUp  { animation:fadeUp  0.4s ease both; }
+.animate-fadeIn  { animation:fadeIn  0.3s ease both; }
+.animate-spin    { animation:spin    0.8s linear infinite; }
+.animate-pulse   { animation:pulse   2s ease-in-out infinite; }
+.animate-float   { animation:float   4s ease-in-out infinite; }
+.animate-glow    { animation:glow    3s ease-in-out infinite; }
+
+@media (max-width:768px) { .hide-mobile { display:none !important; } }
+@media (min-width:769px) { .hide-desktop { display:none !important; } }
