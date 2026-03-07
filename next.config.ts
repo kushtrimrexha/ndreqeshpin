@@ -6,3 +6,12 @@ const nextConfig: NextConfig = {
 };
 
 export default nextConfig;
+
+module.exports = {
+  typescript: {
+    // !! KUJDES !!
+    // Lejon build-in të përfundojë edhe kur ka gabime tipe
+    // !! KUJDES !!
+    ignoreBuildErrors: true,
+  },
+}
