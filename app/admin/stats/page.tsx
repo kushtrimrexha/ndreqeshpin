@@ -3,6 +3,7 @@ import { createServerSupabase } from '@/lib/supabase/server'
 import { supabaseAdmin }        from '@/lib/supabase/admin'
 import PageShell                from '@/components/PageShell'
 import AdminStatsClient         from './AdminStatsClient'
+export const dynamic = 'force-dynamic';
 
 export default async function AdminStatsPage() {
   const supabase = await createServerSupabase()

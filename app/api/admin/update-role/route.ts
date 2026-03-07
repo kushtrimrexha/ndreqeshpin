@@ -1,6 +1,8 @@
 import { NextResponse }        from 'next/server'
 import { createServerSupabase } from '@/lib/supabase/server'
 import { supabaseAdmin }        from '@/lib/supabase/admin'
+export const dynamic = 'force-dynamic'; // e kam shtu per me ma leju publikimin pa errore
+
 
 export async function POST(req: Request) {
   try {
