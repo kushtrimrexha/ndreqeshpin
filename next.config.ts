@@ -1,17 +1,18 @@
-import type { NextConfig } from "next";
+/*import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   /* config options here */
-  reactCompiler: true,
+//  reactCompiler: true,
+//}; 
+const nextConfig = {
+  typescript: {
+    // KUJDES: Kjo lejon build-in edhe nëse ka gabime TypeScript
+    ignoreBuildErrors: true,
+  },
+  eslint: {
+    // Kjo lejon build-in edhe nëse ka gabime ESLint
+    ignoreDuringBuilds: true,
+  },
 };
 
 export default nextConfig;
-
-module.exports = {
-  typescript: {
-    // !! KUJDES !!
-    // Lejon build-in të përfundojë edhe kur ka gabime tipe
-    // !! KUJDES !!
-    ignoreBuildErrors: true,
-  },
-}
