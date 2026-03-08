@@ -227,7 +227,7 @@ export default function SettingsClient({ profile, userEmail }: Props) {
                     { label:'Emri i plotë', val: profile.full_name },
                     { label:'Email aktual', val: currentEmail },
                     { label:'Roli',         val: profile.role.charAt(0).toUpperCase() + profile.role.slice(1) },
-                    { label:'Anëtar që nga',val: new Date(profile.created_at).toLocaleDateString('sq-AL', { day:'numeric', month:'long', year:'numeric' }) },
+                    { label:'Anëtar që nga',val: profile.created_at ? new Date(profile.created_at).toISOString().slice(0, 10).split('-').reverse().join('.') : '—' },
                     { label:'Paketa',       val: profile.package_type === 'free' ? 'Falas' : 'Premium' },
                   ].map(r => (
                     <div key={r.label} style={{ display:'flex', justifyContent:'space-between', padding:'13px 0', borderBottom:'1px solid rgba(255,255,255,0.06)' }}>

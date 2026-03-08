@@ -39,7 +39,12 @@ export default function ClientProfileClient({ profile, stats }: { profile:Profil
     { done:!!avatar,                   label:'Foto profili' },
   ]
   const completionPct = Math.round((completion.filter(c=>c.done).length / completion.length) * 100)
-  const memberSince   = new Date(profile.created_at).toLocaleDateString('sq-AL', { month:'long', year:'numeric' })
+  const memberSince   = (() => {
+    if (!profile.created_at) return '—'
+    const d = new Date(profile.created_at)
+    const months = ['Janar','Shkurt','Mars','Prill','Maj','Qershor','Korrik','Gusht','Shtator','Tetor','Nëntor','Dhjetor']
+    return `${months[d.getMonth()]} ${d.getFullYear()}`
+  })()
 
   async function handleAvatarUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]

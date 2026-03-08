@@ -33,7 +33,7 @@ export default function ProfileShell({
   const [avatar,    setAvatar]    = useState(avatarUrl || '')
   const col = ROLE_COL[role] || '#e8621a'
 
-  const initials = fullName.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2)
+  const initials = (fullName || '?').split(' ').filter(Boolean).map(w => w[0]).join('').toUpperCase().slice(0, 2) || '?'
 
   async function handleAvatarChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
@@ -111,7 +111,7 @@ export default function ProfileShell({
           )}
 
           <div style={{ fontSize: 11, color: 'rgba(232,234,240,0.3)', marginTop: 8 }}>
-            Anëtar që nga {new Date(joinedAt).toLocaleDateString('sq-AL', { month: 'long', year: 'numeric' })}
+            Anëtar që nga {(() => { if (!joinedAt) return '—'; const d = new Date(joinedAt); const months = ['Janar','Shkurt','Mars','Prill','Maj','Qershor','Korrik','Gusht','Shtator','Tetor','Nëntor','Dhjetor']; return `${months[d.getMonth()]} ${d.getFullYear()}` })()}
           </div>
         </div>
 

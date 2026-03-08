@@ -2,6 +2,7 @@
 
 import Sidebar      from '@/components/Sidebar'
 import GlobalSearch from '@/components/GlobalSearch'
+import AiAdvisor   from '@/components/AiAdvisor'
 
 type Role = 'client' | 'company' | 'worker' | 'admin'
 
@@ -107,6 +108,9 @@ export default function PageShell({
           {children}
         </div>
       </div>
+
+      {/* ── AI ADVISOR ─── Fixed bottom-right chat widget ── */}
+      <AiAdvisor role={role} userName={userName} userId={userId} />
     </div>
   )
 }
