@@ -1,264 +1,210 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { createBrowserClient }  from '@supabase/ssr'
-import PageShell                from '@/components/PageShell'
-import StatusBadge              from '@/components/StatusBadge'
-import EmptyState               from '@/components/EmptyState'
-import { useToast }             from '@/components/Toast'
-import { KpiCard, TrendAreaChart, StatsPieChart, ActivityFeed } from '@/components/Analytics'
-import { KpiSkeleton }          from '@/components/Skeleton'
-import Link                     from 'next/link'
+import Link                    from 'next/link'
+import { createBrowserClient } from '@supabase/ssr'
+import PageShell               from '@/components/PageShell'
+import StatusBadge             from '@/components/StatusBadge'
+import EmptyState              from '@/components/EmptyState'
+import { useToast }            from '@/components/Toast'
+import { ActivityFeed }        from '@/components/Analytics'
 
-interface Profile { id:string; full_name:string; city:string; package_type:string; avatar_url?:string }
-interface Worker  { id:string; profession:string; bio:string|null; is_available:boolean; rating_avg:number; total_reviews:number }
-interface Application {
-  id:string; title:string; description:string; city:string
-  area_sqm:number|null; budget_min:number|null; budget_max:number|null
-  offer_count:number; expires_at:string; created_at:string
-  categories?:{name:string;icon:string}
+interface Profile  { id:string; full_name:string; city:string; package_type:string; avatar_url?:string }
+interface Worker   { id:string; profession:string; bio?:string; is_available:boolean; rating_avg:number; total_reviews:number; skills?:string[] }
+interface Application { id:string; title:string; description:string; city:string; area_sqm?:number; budget_min?:number; budget_max?:number; offer_count:number; expires_at:string; created_at:string; categories?:{name:string;icon:string} }
+interface Stats    { totalOffers:number; acceptedOffers:number; pendingOffers:number; totalEarned:number; successRate:number }
+
+interface Props {
+  profile:      Profile
+  worker:       Worker | null
+  stats:        Stats
+  recentOffers: any[]
+  applications: Application[]
 }
 
-function Countdown({ expiresAt }: { expiresAt: string }) {
+function Countdown({ expiresAt }: { expiresAt:string }) {
   const calc = () => {
     const d = new Date(expiresAt).getTime() - Date.now()
-    if (d <= 0) return { label:'Skaduar', urgent:false, expired:true }
-    const h = Math.floor(d/3600000), m = Math.floor((d%3600000)/60000), s = Math.floor((d%60000)/1000)
-    return { label:`${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`, urgent:d<3*3600000, expired:false }
+    if (d <= 0) return { label:'Skaduar', col:'#64748b', expired:true }
+    const h=Math.floor(d/3600000), m=Math.floor((d%3600000)/60000), s=Math.floor((d%60000)/1000)
+    return { label:`${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`, col:d<3*3600000?'#ef4444':'#22d3a5', expired:false }
   }
-  const [t, setT] = useState(calc)
-  useEffect(() => { const i = setInterval(() => setT(calc()), 1000); return () => clearInterval(i) }, [expiresAt])
-  const col = t.expired ? '#6b7280' : t.urgent ? '#ef4444' : '#10b981'
-  return <span style={{ fontFamily:"'Fira Code',monospace", fontSize:11, fontWeight:700, color:col, background:`${col}12`, border:`1px solid ${col}30`, borderRadius:100, padding:'3px 9px', whiteSpace:'nowrap' }}>⏱ {t.label}</span>
+  const [t,setT] = useState(calc)
+  useEffect(() => { const i=setInterval(()=>setT(calc()),1000); return()=>clearInterval(i) }, [expiresAt])
+  return <span style={{ fontFamily:'monospace', fontSize:11, fontWeight:700, color:t.col, background:`${t.col}12`, border:`1px solid ${t.col}25`, borderRadius:7, padding:'2px 8px' }}>⏱ {t.label}</span>
 }
 
-export default function WorkerDashboard({ profile, worker }: { profile: Profile; worker: Worker }) {
-  const supabase = createBrowserClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  )
-  const toast = useToast()
+export default function WorkerDashboard({ profile, worker, stats, recentOffers, applications }: Props) {
+  const supabase  = createBrowserClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!)
+  const toast     = useToast()
+  const [avail,   setAvail]   = useState(worker?.is_available ?? true)
+  const [saving,  setSaving]  = useState(false)
+  const [search,  setSearch]  = useState('')
+  const [filter,  setFilter]  = useState<'all'|'budget'|'nearby'>('all')
 
-  const [apps,          setApps]          = useState<Application[]>([])
-  const [loading,       setLoading]       = useState(true)
-  const [available,     setAvailable]     = useState(worker?.is_available ?? true)
-  const [togglingAvail, setTogglingAvail] = useState(false)
-  const [stats,         setStats]         = useState({ sent:0, accepted:0, pending:0, earnings:0 })
-  const [chartData,     setChartData]     = useState<{label:string;value:number}[]>([])
-  const [activity,      setActivity]      = useState<any[]>([])
-  const [filterCity,    setFilterCity]    = useState<'all'|'mine'>('all')
-
-  const isPremium = profile.package_type !== 'free'
-
-  useEffect(() => {
-    async function load() {
-      setLoading(true)
-
-      // Applications in worker's city + all
-      const query = supabase.from('applications')
-        .select('*, categories(name,icon)')
-        .eq('status', 'active')
-        .order('created_at', { ascending: false })
-        .limit(30)
-
-      const { data: appsData } = await query
-      setApps(appsData || [])
-
-      // Worker's own offers
-      const { data: offersData } = await supabase
-        .from('offers')
-        .select('id, price, status, created_at, applications(title)')
-        .eq('worker_id', worker?.id)
-        .order('created_at', { ascending: false })
-
-      const offers = offersData || []
-      const accepted = offers.filter(o => o.status === 'accepted')
-      const pending  = offers.filter(o => o.status === 'pending')
-      const earnings = accepted.reduce((s, o) => s + (o.price || 0), 0)
-      setStats({ sent: offers.length, accepted: accepted.length, pending: pending.length, earnings })
-
-      // Monthly trend
-      const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
-      const now = new Date()
-      const trend = Array.from({ length: 6 }, (_, i) => {
-        const d = new Date(now.getFullYear(), now.getMonth() - 5 + i, 1)
-        const count = offers.filter(o => {
-          const od = new Date(o.created_at)
-          return od.getMonth() === d.getMonth() && od.getFullYear() === d.getFullYear()
-        }).length
-        return { label: months[d.getMonth()], value: count }
-      })
-      setChartData(trend)
-
-      // Activity from recent offers
-      const act = offers.slice(0, 5).map((o: any) => ({
-        id: o.id,
-        icon: o.status === 'accepted' ? '✅' : o.status === 'declined' ? '❌' : '💼',
-        title: o.status === 'accepted' ? 'Ofertë e pranuar!' : 'Ofertë e dërguar',
-        description: `${o.applications?.title || 'Aplikim'} — €${o.price?.toLocaleString() || 0}`,
-        time: new Date(o.created_at).toLocaleDateString('sq-AL'),
-        color: o.status === 'accepted' ? '#10b981' : o.status === 'declined' ? '#ef4444' : '#3b82f6',
-      }))
-      setActivity(act)
-
-      setLoading(false)
-    }
-    load()
-  }, [worker?.id])
+  const hour     = new Date().getHours()
+  const greeting = hour < 12 ? 'Mirëmëngjes' : hour < 17 ? 'Mirëdita' : 'Mirëmbrëma'
 
   async function toggleAvailability() {
-    setTogglingAvail(true)
-    const next = !available
-    const { error } = await supabase.from('workers').update({ is_available: next }).eq('id', worker?.id)
-    if (error) { toast.error('Gabim', 'Provo sërish.'); setTogglingAvail(false); return }
-    setAvailable(next)
-    setTogglingAvail(false)
-    toast.success(
-      next ? '✅ Tani je i disponueshëm!' : '⏸ Disponueshmëria u çaktivizua',
-      next ? 'Klientët mund të shohin profilin tënd dhe të dërgojnë oferta.' : 'Nuk do të shfaqesh në rezultate kërkimi.'
-    )
+    setSaving(true)
+    const newVal = !avail
+    setAvail(newVal)
+    try {
+      if (worker?.id) {
+        await supabase.from('workers').update({ is_available:newVal }).eq('id', worker.id)
+        toast.success(newVal ? '✅ Je disponueshëm!' : '🔴 Je jo-disponueshëm', newVal ? 'Klientët mund t\'të gjejnë.' : 'Nuk do të marrësh oferta.')
+      }
+    } finally { setSaving(false) }
   }
 
-  const filteredApps = filterCity === 'mine'
-    ? apps.filter(a => a.city?.toLowerCase() === profile.city?.toLowerCase())
-    : apps
+  const activity = recentOffers.slice(0,5).map((o:any) => ({
+    id:o.id,
+    icon:o.status==='accepted'?'✅':o.status==='pending'?'⏳':'❌',
+    title:o.status==='accepted'?'Ofertë e pranuar!':o.status==='pending'?'Ofertë dërguar':'Ofertë refuzuar',
+    description:`${o.applications?.title||'Projekt'} — €${(o.price||0).toLocaleString()}`,
+    time:new Date(o.created_at).toLocaleDateString('sq-AL'), color:o.status==='accepted'?'#22d3a5':o.status==='pending'?'#fbbf24':'#f87171',
+  }))
+
+  const filteredApps = applications
+    .filter(a => !search || a.title.toLowerCase().includes(search.toLowerCase()) || a.city.toLowerCase().includes(search.toLowerCase()))
+    .filter(a => {
+      if (filter === 'budget') return (a.budget_max||0) > 0
+      if (filter === 'nearby') return a.city === profile.city
+      return true
+    })
 
   return (
-    <PageShell role="worker" userName={profile.full_name} userId={profile.id}
-      avatar={profile.avatar_url} package={profile.package_type}
-      pageTitle="Dashboard" pageIcon="⊞"
-      actions={
-        <div style={{ display:'flex', gap:10, alignItems:'center' }}>
-          {/* Availability Toggle */}
-          <button onClick={toggleAvailability} disabled={togglingAvail}
-            style={{
-              display:'flex', alignItems:'center', gap:8, padding:'8px 16px',
-              borderRadius:10, border:'none', cursor: togglingAvail ? 'not-allowed' : 'pointer',
-              fontFamily:'inherit', fontSize:13, fontWeight:700, transition:'all 0.2s',
-              background: available ? 'rgba(16,185,129,0.12)' : 'rgba(240,236,228,0.06)',
-              color: available ? '#10b981' : 'rgba(240,236,228,0.4)',
-              boxShadow: available ? '0 0 0 1px rgba(16,185,129,0.25)' : '0 0 0 1px rgba(240,236,228,0.1)',
-            }}>
-            <div style={{
-              width:8, height:8, borderRadius:'50%',
-              background: available ? '#10b981' : 'rgba(240,236,228,0.25)',
-              boxShadow: available ? '0 0 8px rgba(16,185,129,0.8)' : 'none',
-              animation: available ? 'pulse 2s infinite' : 'none',
-            }} />
-            {togglingAvail ? 'Duke ndryshuar...' : available ? 'I disponueshëm' : 'Jo aktiv'}
-          </button>
-          <Link href="/worker/offers" style={{ display:'inline-flex', alignItems:'center', gap:7, background:'linear-gradient(135deg,#3b82f6,#6366f1)', color:'#fff', fontWeight:700, fontSize:13, padding:'9px 20px', borderRadius:11, textDecoration:'none', boxShadow:'0 4px 16px rgba(59,130,246,0.3)' }}>
-            💼 Ofertat e mia
-          </Link>
-        </div>
-      }>
-
+    <PageShell role="worker" userName={profile.full_name} userId={profile.id} package={profile.package_type} pageTitle="Dashboard" pageIcon="🔧">
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@700&display=swap');
-        @keyframes fadeUp { from{opacity:0;transform:translateY(12px)} to{opacity:1;transform:translateY(0)} }
-        .app-card { transition: all 0.2s !important; }
-        .app-card:hover { border-color: rgba(59,130,246,0.35) !important; transform: translateY(-2px); background: rgba(59,130,246,0.04) !important; }
-        .quick-link:hover { border-color: rgba(59,130,246,0.25) !important; transform: translateY(-2px); }
-        .offer-btn:hover { opacity: 0.85 !important; transform: translateY(-1px); }
-        @media(max-width:900px) { .worker-grid { grid-template-columns: 1fr !important; } }
+        @keyframes fadeUp  { from{opacity:0;transform:translateY(12px)} to{opacity:1;transform:translateY(0)} }
+        @keyframes glow    { 0%,100%{box-shadow:0 0 0 0 rgba(34,211,165,0.4)} 50%{box-shadow:0 0 0 6px rgba(34,211,165,0)} }
+        .app-card:hover    { border-color:rgba(240,236,228,0.14)!important; transform:translateY(-1px); box-shadow:0 4px 20px rgba(0,0,0,0.15); }
+        .app-card          { transition:all 0.2s; }
+        .quick-link:hover  { border-color:rgba(240,236,228,0.14)!important; transform:translateY(-2px); }
+        .quick-link        { transition:all 0.2s; }
+        .offer-btn:hover   { transform:translateY(-1px); box-shadow:0 4px 14px rgba(59,130,246,0.35)!important; }
       `}</style>
 
-      {/* Greeting */}
+      {/* Header with greeting + availability */}
       <div style={{ marginBottom:28, animation:'fadeUp 0.5s ease' }}>
-        <p style={{ fontSize:11, fontWeight:700, color:'rgba(240,236,228,0.3)', textTransform:'uppercase', letterSpacing:'0.12em', marginBottom:8 }}>
-          {worker?.profession || 'Punëtor profesionist'}
-        </p>
-        <h1 style={{ fontFamily:"'Fraunces',serif", fontSize:'clamp(1.5rem,3vw,2rem)', fontWeight:900, letterSpacing:'-0.03em', lineHeight:1.1, marginBottom:10 }}>
-          {profile.full_name.split(' ')[0]}, <span style={{ color:'#3b82f6', fontStyle:'italic' }}>çfarë punon sot?</span>
-        </h1>
-        <div style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' }}>
-          <span style={{ fontSize:12, color:'rgba(240,236,228,0.4)' }}>📍 {profile.city}</span>
-          <StatusBadge status={available ? 'active' : 'inactive'} size="xs" />
-          {isPremium && <StatusBadge status="premium" size="xs" />}
-          {worker?.rating_avg > 0 && (
-            <span style={{ fontSize:12, color:'#fbbf24', fontWeight:700 }}>★ {worker.rating_avg.toFixed(1)} ({worker.total_reviews} vlerësime)</span>
-          )}
+        <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', flexWrap:'wrap', gap:16 }}>
+          <div>
+            <p style={{ fontSize:11, fontWeight:700, color:'rgba(240,236,228,0.3)', textTransform:'uppercase', letterSpacing:'0.12em', marginBottom:8 }}>
+              {greeting}, <span style={{ color:'#10b981' }}>{profile.full_name.split(' ')[0]}</span>
+            </p>
+            <h1 style={{ fontFamily:"'Fraunces',serif", fontSize:'clamp(1.6rem,3vw,2.2rem)', fontWeight:900, letterSpacing:'-0.03em', lineHeight:1.1, marginBottom:8 }}>
+              Pasqyra juaj <span style={{ color:'#10b981', fontStyle:'italic' }}>profesionale</span>
+            </h1>
+            <div style={{ display:'flex', gap:10, flexWrap:'wrap', alignItems:'center' }}>
+              {worker?.profession && <span style={{ fontSize:12, color:'rgba(240,236,228,0.5)' }}>🔧 {worker.profession}</span>}
+              {worker?.rating_avg && worker.rating_avg > 0 && <span style={{ fontSize:12, color:'rgba(240,236,228,0.5)' }}>⭐ {worker.rating_avg.toFixed(1)} ({worker.total_reviews} reviews)</span>}
+              <span style={{ fontSize:12, color:'rgba(240,236,228,0.5)' }}>📍 {profile.city}</span>
+            </div>
+          </div>
+
+          {/* Availability toggle */}
+          <div style={{ padding:'14px 18px', background:'rgba(240,236,228,0.02)', border:`1px solid ${avail?'rgba(34,211,165,0.2)':'rgba(240,236,228,0.08)'}`, borderRadius:14, display:'flex', alignItems:'center', gap:14 }}>
+            <div>
+              <div style={{ fontSize:12, fontWeight:700, marginBottom:2 }}>Disponueshmëria</div>
+              <div style={{ fontSize:11, color:avail?'#22d3a5':'rgba(240,236,228,0.35)' }}>
+                {avail ? '🟢 Po marr punë' : '🔴 Jo disponueshëm'}
+              </div>
+            </div>
+            <button onClick={toggleAvailability} disabled={saving}
+              style={{ width:48, height:26, borderRadius:13, border:'none', background:avail?'#22d3a5':'rgba(240,236,228,0.1)', cursor:'pointer', position:'relative', transition:'all 0.3s', flexShrink:0, boxShadow:avail?'0 0 12px rgba(34,211,165,0.4)':'none' }}>
+              <div style={{ width:20, height:20, borderRadius:'50%', background:'#fff', position:'absolute', top:3, left:avail?24:3, transition:'left 0.3s', boxShadow:'0 1px 4px rgba(0,0,0,0.3)' }}/>
+            </button>
+          </div>
         </div>
       </div>
 
-      {/* KPI Cards */}
-      {loading ? (
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:12, marginBottom:28 }}>
-          {[1,2,3,4].map(i => <KpiSkeleton key={i} />)}
-        </div>
-      ) : (
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(180px,1fr))', gap:12, marginBottom:28 }}>
-          <KpiCard title="Oferta dërguar" value={stats.sent}     icon="💼" color="#3b82f6" change={stats.sent > 3 ? 8 : undefined} />
-          <KpiCard title="Të pranuara"    value={stats.accepted}  icon="✅" color="#10b981" change={stats.accepted > 0 ? 15 : undefined} />
-          <KpiCard title="Në pritje"       value={stats.pending}   icon="⏳" color="#fbbf24" />
-          <KpiCard title="Të ardhura"      value={stats.earnings}  icon="💰" color="#a78bfa" prefix="€" changeLabel="nga punët" />
+      {/* KPIs */}
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(155px,1fr))', gap:12, marginBottom:28 }}>
+        {[
+          { icon:'💼', label:'Ofertat dërguar', val:stats.totalOffers,    col:'#10b981' },
+          { icon:'✅', label:'Të pranuara',      val:stats.acceptedOffers, col:'#22d3a5' },
+          { icon:'⏳', label:'Në pritje',        val:stats.pendingOffers,  col:'#fbbf24' },
+          { icon:'🎯', label:'Sukses',           val:`${stats.successRate}%`,col:'#60a5fa' },
+          { icon:'💰', label:'Fituar',           val:`€${stats.totalEarned.toLocaleString()}`,col:'#22d3a5' },
+          { icon:'⭐', label:'Rating',           val:worker?.rating_avg&&worker.rating_avg>0?`${worker.rating_avg.toFixed(1)}★`:'—',col:'#fbbf24' },
+        ].map((kpi,i) => (
+          <div key={i} style={{ padding:'16px 18px', background:'rgba(240,236,228,0.02)', border:'1px solid rgba(240,236,228,0.07)', borderRadius:16, animation:`fadeUp 0.4s ease ${i*0.06}s both` }}>
+            <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:10 }}>
+              <span style={{ fontSize:16 }}>{kpi.icon}</span>
+              <span style={{ fontSize:11, color:'rgba(240,236,228,0.4)', fontWeight:600 }}>{kpi.label}</span>
+            </div>
+            <div style={{ fontFamily:"'Fraunces',serif", fontSize:'1.65rem', fontWeight:900, color:kpi.col, lineHeight:1 }}>{kpi.val}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Skills */}
+      {worker?.skills && worker.skills.length > 0 && (
+        <div style={{ marginBottom:20, padding:'14px 18px', background:'rgba(16,185,129,0.03)', border:'1px solid rgba(16,185,129,0.12)', borderRadius:14, display:'flex', alignItems:'center', gap:12, flexWrap:'wrap' }}>
+          <span style={{ fontSize:12, fontWeight:700, color:'rgba(240,236,228,0.5)', whiteSpace:'nowrap' }}>🛠 Aftësitë tuaja:</span>
+          {worker.skills.map(s => (
+            <span key={s} style={{ fontSize:11, color:'#10b981', background:'rgba(16,185,129,0.08)', border:'1px solid rgba(16,185,129,0.18)', borderRadius:7, padding:'3px 10px', fontWeight:600 }}>{s}</span>
+          ))}
+          <Link href="/worker/profile" style={{ marginLeft:'auto', fontSize:11, color:'rgba(240,236,228,0.4)', textDecoration:'none', fontWeight:600 }}>Edito →</Link>
         </div>
       )}
 
-      {/* Charts */}
-      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:14, marginBottom:24 }}>
-        <TrendAreaChart data={chartData} title="📈 Aktiviteti — 6 muajt e fundit" color="#3b82f6" name="Oferta" height={180} />
-        {stats.sent > 0 ? (
-          <StatsPieChart
-            data={[
-              { label:'Pranuar',  value: stats.accepted,                                          color:'#10b981' },
-              { label:'Në pritje', value: stats.pending,                                           color:'#fbbf24' },
-              { label:'Refuzuar', value: stats.sent - stats.accepted - stats.pending,              color:'#ef4444' },
-            ].filter(d => d.value > 0)}
-            title="📊 Statusi i ofertave" height={180}
-          />
-        ) : (
-          <div style={{ background:'rgba(240,236,228,0.02)', border:'1px solid rgba(240,236,228,0.07)', borderRadius:16, display:'flex', alignItems:'center', justifyContent:'center' }}>
-            <EmptyState icon="📊" title="Ende pa të dhëna" message="Dërgoni oferta për të parë statistikat" size="sm" />
-          </div>
-        )}
-      </div>
+      {/* Main grid */}
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 310px', gap:16, marginBottom:24, alignItems:'start' }}>
 
-      {/* Applications + Activity */}
-      <div className="worker-grid" style={{ display:'grid', gridTemplateColumns:'1fr 300px', gap:14, marginBottom:28 }}>
-
-        {/* Available applications */}
-        <div style={{ background:'rgba(240,236,228,0.02)', border:'1px solid rgba(240,236,228,0.07)', borderRadius:16, overflow:'hidden' }}>
-          <div style={{ padding:'14px 20px', borderBottom:'1px solid rgba(240,236,228,0.07)', display:'flex', alignItems:'center', justifyContent:'space-between', flexWrap:'wrap', gap:8 }}>
-            <span style={{ fontSize:13, fontWeight:700, color:'#f0ece4', opacity:0.7 }}>📋 Aplikimet aktive</span>
-            <div style={{ display:'flex', gap:4 }}>
-              {(['all','mine'] as const).map(f => (
-                <button key={f} onClick={() => setFilterCity(f)}
-                  style={{ padding:'5px 12px', borderRadius:8, border:'none', cursor:'pointer', fontFamily:'inherit', fontSize:11, fontWeight:700, background: filterCity===f ? '#3b82f6' : 'rgba(240,236,228,0.06)', color: filterCity===f ? '#fff' : 'rgba(240,236,228,0.4)', transition:'all 0.15s' }}>
-                  {f === 'all' ? '🌍 Të gjitha' : `📍 ${profile.city}`}
-                </button>
-              ))}
+        {/* Left: Active applications */}
+        <div>
+          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:14, flexWrap:'wrap', gap:10 }}>
+            <div>
+              <h2 style={{ fontFamily:"'Fraunces',serif", fontWeight:900, fontSize:'1.1rem', marginBottom:3 }}>🔥 Projekte disponueshme</h2>
+              <p style={{ fontSize:12, color:'rgba(240,236,228,0.4)' }}>{applications.length} aktive</p>
+            </div>
+            <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
+              <div style={{ position:'relative' }}>
+                <span style={{ position:'absolute', left:8, top:'50%', transform:'translateY(-50%)', fontSize:11, opacity:.3 }}>🔍</span>
+                <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Kërko..."
+                  style={{ padding:'7px 10px 7px 24px', background:'rgba(240,236,228,0.04)', border:'1px solid rgba(240,236,228,0.08)', borderRadius:9, fontSize:12, color:'#f0ece4', fontFamily:'inherit', outline:'none', width:140 }}/>
+              </div>
+              <div style={{ display:'flex', gap:3, background:'rgba(240,236,228,0.04)', padding:3, borderRadius:9, border:'1px solid rgba(240,236,228,0.07)' }}>
+                {(['all','budget','nearby'] as const).map(f => (
+                  <button key={f} onClick={()=>setFilter(f)}
+                    style={{ padding:'5px 10px', borderRadius:7, border:'none', fontSize:11, fontWeight:700, cursor:'pointer', fontFamily:'inherit', background:filter===f?'#10b981':'transparent', color:filter===f?'#fff':'rgba(240,236,228,0.4)', transition:'all 0.15s', whiteSpace:'nowrap' }}>
+                    {f==='all'?'Të gjitha':f==='budget'?'💰 Budget':'📍 Afër'}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
-          <div style={{ padding:12, display:'flex', flexDirection:'column', gap:8, maxHeight:400, overflowY:'auto' }}>
-            {loading ? [1,2,3].map(i => (
-              <div key={i} style={{ padding:14, border:'1px solid rgba(240,236,228,0.06)', borderRadius:12, display:'flex', flexDirection:'column', gap:8 }}>
-                <div style={{ height:13, borderRadius:5, background:'rgba(240,236,228,0.06)', width:'70%' }} />
-                <div style={{ height:11, borderRadius:5, background:'rgba(240,236,228,0.04)', width:'50%' }} />
-              </div>
-            )) : filteredApps.length === 0 ? (
-              <EmptyState icon="📭" title="Asnjë aplikim" message="Nuk ka aplikime aktive për momentin." size="sm" />
-            ) : filteredApps.map((app, i) => (
+
+          <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+            {filteredApps.length === 0 ? (
+              <EmptyState icon="📋" title="Nuk ka projekte" message={search?'Provo kërkim tjetër.':'Nuk ka aplikime aktive.'} size="sm"/>
+            ) : filteredApps.map((app,i) => (
               <div key={app.id} className="app-card"
-                style={{ padding:'14px 16px', background:'rgba(240,236,228,0.02)', border:'1px solid rgba(240,236,228,0.07)', borderRadius:12, animation:`fadeUp 0.3s ease ${i*0.05}s both`, cursor:'default' }}>
-                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:10, marginBottom:8 }}>
+                style={{ padding:'16px 18px', background:'rgba(240,236,228,0.02)', border:'1px solid rgba(240,236,228,0.07)', borderRadius:14, animation:`fadeUp 0.3s ease ${i*0.04}s both` }}>
+                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:12, marginBottom:10 }}>
                   <div style={{ flex:1, minWidth:0 }}>
-                    {app.categories && <span style={{ fontSize:10, color:'rgba(240,236,228,0.35)', display:'block', marginBottom:3 }}>{app.categories.icon} {app.categories.name}</span>}
-                    <div style={{ fontSize:13, fontWeight:700, color:'#f0ece4', lineHeight:1.3, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{app.title}</div>
+                    {app.categories && <span style={{ fontSize:10, color:'rgba(240,236,228,0.3)', display:'block', marginBottom:3 }}>{app.categories.icon} {app.categories.name}</span>}
+                    <div style={{ fontSize:13, fontWeight:700, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{app.title}</div>
+                    {app.description && <p style={{ fontSize:11, color:'rgba(240,236,228,0.35)', marginTop:3, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{app.description}</p>}
                   </div>
-                  {app.budget_max && app.budget_max > 0 && (
-                    <div style={{ fontFamily:"'Fraunces',serif", fontSize:'1.1rem', fontWeight:900, color:'#3b82f6', whiteSpace:'nowrap', flexShrink:0 }}>€{app.budget_max.toLocaleString()}</div>
+                  {(app.budget_max||0)>0 && (
+                    <div style={{ textAlign:'right', flexShrink:0 }}>
+                      <div style={{ fontFamily:"'Fraunces',serif", fontWeight:900, color:'#10b981', fontSize:'1.05rem' }}>€{(app.budget_max||0).toLocaleString()}</div>
+                      {app.budget_min && <div style={{ fontSize:10, color:'rgba(240,236,228,0.3)' }}>nga €{app.budget_min.toLocaleString()}</div>}
+                    </div>
                   )}
                 </div>
-                <div style={{ display:'flex', gap:8, alignItems:'center', justifyContent:'space-between', flexWrap:'wrap' }}>
-                  <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+                <div style={{ display:'flex', gap:10, alignItems:'center', justifyContent:'space-between', flexWrap:'wrap' }}>
+                  <div style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' }}>
                     <span style={{ fontSize:11, color:'rgba(240,236,228,0.35)' }}>📍 {app.city}</span>
-                    <Countdown expiresAt={app.expires_at} />
+                    {app.area_sqm && <span style={{ fontSize:11, color:'rgba(240,236,228,0.3)' }}>📐 {app.area_sqm}m²</span>}
+                    <span style={{ fontSize:11, color:'rgba(240,236,228,0.3)' }}>💼 {app.offer_count} oferta</span>
+                    <Countdown expiresAt={app.expires_at}/>
                   </div>
-                  <Link href={`/worker/offers?apply=${app.id}`}
-                    className="offer-btn"
-                    style={{ fontSize:11, fontWeight:700, color:'#fff', background:'linear-gradient(135deg,#3b82f6,#6366f1)', padding:'5px 14px', borderRadius:8, textDecoration:'none', transition:'all 0.2s', boxShadow:'0 2px 8px rgba(59,130,246,0.3)' }}>
-                    Apliko →
+                  <Link href={`/worker/offers?apply=${app.id}`} className="offer-btn"
+                    style={{ fontSize:11, fontWeight:800, color:'#fff', background:'linear-gradient(135deg,#10b981,#22d3a5)', padding:'6px 16px', borderRadius:9, textDecoration:'none', boxShadow:'0 2px 10px rgba(16,185,129,0.3)', transition:'all 0.2s', whiteSpace:'nowrap' }}>
+                    Dërgo ofertë →
                   </Link>
                 </div>
               </div>
@@ -266,14 +212,53 @@ export default function WorkerDashboard({ profile, worker }: { profile: Profile;
           </div>
         </div>
 
-        {/* Activity */}
-        <ActivityFeed items={activity} title="🕐 Aktiviteti im" />
+        {/* Right panel */}
+        <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
+
+          {/* Profile completion */}
+          {(!worker?.bio || !worker?.skills?.length) && (
+            <div style={{ padding:'16px', background:'rgba(251,191,36,0.05)', border:'1px solid rgba(251,191,36,0.15)', borderRadius:14 }}>
+              <div style={{ fontSize:13, fontWeight:700, marginBottom:8, display:'flex', alignItems:'center', gap:8 }}>
+                ⚠️ Plotëso profilin
+              </div>
+              <p style={{ fontSize:12, color:'rgba(240,236,228,0.5)', lineHeight:1.6, marginBottom:10 }}>Profili i plotë të jep 3x më shumë oferta.</p>
+              <Link href="/worker/profile"
+                style={{ fontSize:12, fontWeight:700, color:'#fbbf24', textDecoration:'none', display:'inline-flex', alignItems:'center', gap:5 }}>
+                Plotëso profilin →
+              </Link>
+            </div>
+          )}
+
+          <ActivityFeed items={activity} title="⚡ Aktiviteti im" />
+
+          {/* Recent offers summary */}
+          {recentOffers.length > 0 && (
+            <div style={{ background:'rgba(240,236,228,0.02)', border:'1px solid rgba(240,236,228,0.07)', borderRadius:16, overflow:'hidden' }}>
+              <div style={{ padding:'13px 16px', borderBottom:'1px solid rgba(240,236,228,0.06)', fontSize:13, fontWeight:700, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+                <span>💼 Ofertat e fundit</span>
+                <Link href="/worker/offers" style={{ fontSize:11, color:'#10b981', textDecoration:'none', fontWeight:700 }}>Shiko →</Link>
+              </div>
+              {recentOffers.slice(0,4).map((o:any,i:number) => (
+                <div key={o.id} style={{ padding:'11px 16px', borderBottom:i<3?'1px solid rgba(240,236,228,0.04)':'none', display:'flex', justifyContent:'space-between', alignItems:'center', gap:10 }}>
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <div style={{ fontSize:12, fontWeight:600, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{o.applications?.title||'—'}</div>
+                    <div style={{ fontSize:11, color:'rgba(240,236,228,0.35)' }}>📍 {o.applications?.city||'—'}</div>
+                  </div>
+                  <div style={{ textAlign:'right' }}>
+                    <div style={{ fontFamily:"'Fraunces',serif", fontWeight:900, color:'#10b981', fontSize:'0.95rem' }}>€{(o.price||0).toLocaleString()}</div>
+                    <StatusBadge status={o.status} size="xs"/>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Quick links */}
       <div>
         <p style={{ fontSize:11, fontWeight:700, color:'rgba(240,236,228,0.3)', textTransform:'uppercase', letterSpacing:'0.1em', marginBottom:14 }}>Aksesi i shpejtë</p>
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(160px,1fr))', gap:10 }}>
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(155px,1fr))', gap:10 }}>
           {[
             { href:'/worker/applications', icon:'📋', label:'Aplikimet',   desc:'Gjej punë' },
             { href:'/worker/offers',       icon:'💼', label:'Ofertat',     desc:'Menaxho bids' },
@@ -283,7 +268,7 @@ export default function WorkerDashboard({ profile, worker }: { profile: Profile;
             { href:'/pricing',             icon:'💎', label:'Premium',     desc:'Shiko më shumë punë' },
           ].map(item => (
             <Link key={item.href} href={item.href} className="quick-link"
-              style={{ padding:'16px', background:'rgba(240,236,228,0.02)', border:'1px solid rgba(240,236,228,0.07)', borderRadius:14, textDecoration:'none', transition:'all 0.2s', display:'block' }}>
+              style={{ padding:'16px', background:'rgba(240,236,228,0.02)', border:'1px solid rgba(240,236,228,0.07)', borderRadius:14, textDecoration:'none', display:'block' }}>
               <div style={{ fontSize:22, marginBottom:8 }}>{item.icon}</div>
               <div style={{ fontSize:13, fontWeight:700, color:'#f0ece4', marginBottom:3 }}>{item.label}</div>
               <div style={{ fontSize:11, color:'rgba(240,236,228,0.35)' }}>{item.desc}</div>

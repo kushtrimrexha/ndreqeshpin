@@ -1,191 +1,114 @@
 'use client'
 
-interface Company { business_name:string; rating_avg:number; is_verified:boolean; package_type:string }
-interface Stats   { totalOffers:number; acceptedOffers:number; pendingOffers:number; totalRevenue:number; successRate:number }
-interface Offer   { id:string; price:number; status:string; created_at:string; applications:{title:string;city:string}|null }
-interface Review  { rating:number; created_at:string }
+import { useState } from 'react'
+import { KpiCard, TrendAreaChart, StatsBarChart, StatsPieChart, ActivityFeed } from '@/components/Analytics'
 
-function StatCard({ icon, label, value, col, sub }: { icon:string; label:string; value:string|number; col:string; sub?:string }) {
-  return (
-    <div style={{ padding:'22px', background:'rgba(255,255,255,0.02)', border:'1px solid rgba(255,255,255,0.08)', borderRadius:18, animation:'fadeUp 0.4s ease both' }}>
-      <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:14 }}>
-        <div style={{ width:38, height:38, borderRadius:11, background:`${col}15`, display:'flex', alignItems:'center', justifyContent:'center', fontSize:18 }}>{icon}</div>
-        <span style={{ fontSize:12, color:'rgba(232,234,240,0.45)', fontWeight:600 }}>{label}</span>
-      </div>
-      <div style={{ fontFamily:"'Fraunces',serif", fontSize:'2.2rem', fontWeight:900, color:col, lineHeight:1, marginBottom:sub?6:0 }}>{value}</div>
-      {sub && <div style={{ fontSize:12, color:'rgba(232,234,240,0.35)', marginTop:6 }}>{sub}</div>}
-    </div>
-  )
+interface Stats {
+  totalOffers:number; acceptedOffers:number; pendingOffers:number; rejectedOffers:number
+  totalApplications:number; activeApplications:number
+  avgPrice:number; totalEarnings:number
+  rating:number; totalReviews:number; successRate:number
+}
+interface Props {
+  stats:          Stats
+  recentOffers:   any[]
+  monthlyOffers:  Record<string,number>
+  cityBreakdown:  Record<string,number>
 }
 
-function MiniBar({ val, max, col }: { val:number; max:number; col:string }) {
-  const pct = max > 0 ? (val/max)*100 : 0
-  return (
-    <div style={{ flex:1, height:6, background:'rgba(255,255,255,0.06)', borderRadius:3, overflow:'hidden' }}>
-      <div style={{ height:'100%', width:`${pct}%`, background:col, borderRadius:3, transition:'width 1.2s ease' }} />
-    </div>
-  )
-}
+export default function CompanyStatsClient({ stats, recentOffers, monthlyOffers, cityBreakdown }: Props) {
 
-export default function CompanyStatsClient({ company, stats, recentOffers, reviews }: {
-  company:Company; stats:Stats; recentOffers:Offer[]; reviews:Review[]
-}) {
-  const rejectedOffers = stats.totalOffers - stats.acceptedOffers - stats.pendingOffers
-
-  // Rating breakdown
-  const ratingBreak = [5,4,3,2,1].map(s => ({
-    star: s,
-    count: reviews.filter(r => r.rating === s).length,
-    col: s>=4 ? '#22d3a5' : s===3 ? '#fbbf24' : '#f87171',
+  const trendData = Object.entries(monthlyOffers).map(([label,value]) => ({ label, value }))
+  const cityData  = Object.entries(cityBreakdown).slice(0,6).map(([label,value],i) => ({
+    label, value, color:['#e8621a','#22d3a5','#3b82f6','#fbbf24','#a78bfa','#f87171'][i]
   }))
 
-  // Monthly offers — last 6 months
-  const months: Record<string, { sent:number; won:number }> = {}
-  const now = new Date()
-  for (let i=5; i>=0; i--) {
-    const d = new Date(now.getFullYear(), now.getMonth()-i, 1)
-    const key = d.toLocaleDateString('sq-AL', { month:'short', year:'2-digit' })
-    months[key] = { sent:0, won:0 }
-  }
-  recentOffers.forEach(o => {
-    const key = new Date(o.created_at).toLocaleDateString('sq-AL', { month:'short', year:'2-digit' })
-    if (months[key]) {
-      months[key].sent++
-      if (o.status === 'accepted') months[key].won++
-    }
-  })
-  const maxMonth = Math.max(...Object.values(months).map(m => m.sent), 1)
+  const activityFeed = recentOffers.slice(0,6).map((o:any) => ({
+    id: o.id,
+    icon: o.status==='accepted'?'✅':o.status==='pending'?'⏳':'❌',
+    title: o.status==='accepted' ? 'Ofertë e pranuar!' : 'Ofertë e dërguar',
+    description: `${o.applications?.title||'Projekt'} — €${(o.price||0).toLocaleString()}`,
+    time: new Date(o.created_at).toLocaleDateString('sq-AL'),
+    color: o.status==='accepted'?'#22d3a5':o.status==='pending'?'#e8621a':'#6b7280',
+  }))
 
   return (
-    <div>
-      <style>{`@keyframes fadeUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}`}</style>
+    <div style={{ display:'flex', flexDirection:'column', gap:24 }}>
+      <style>{`
+        @keyframes fadeUp { from{opacity:0;transform:translateY(12px)} to{opacity:1;transform:translateY(0)} }
+        @media(max-width:900px){ .stats-2col{grid-template-columns:1fr!important} }
+        @media(max-width:600px){ .kpi-grid{grid-template-columns:1fr 1fr!important} }
+      `}</style>
 
       {/* Header */}
-      <div style={{ marginBottom:28 }}>
-        <h1 style={{ fontFamily:"'Fraunces',serif", fontSize:'1.9rem', fontWeight:900, letterSpacing:'-0.03em', marginBottom:6 }}>Statistikat</h1>
-        <p style={{ fontSize:14, color:'rgba(232,234,240,0.45)' }}>Performanca e {company.business_name}</p>
+      <div style={{ animation:'fadeUp 0.5s ease' }}>
+        <p style={{ fontSize:11,fontWeight:700,color:'rgba(240,236,228,0.3)',textTransform:'uppercase',letterSpacing:'0.12em',marginBottom:8 }}>Analitikë biznesi</p>
+        <h1 style={{ fontFamily:"'Fraunces',serif",fontSize:'clamp(1.5rem,3vw,2rem)',fontWeight:900,letterSpacing:'-0.03em',lineHeight:1.1 }}>
+          Statistikat e <span style={{ color:'#e8621a',fontStyle:'italic' }}>kompanisë</span>
+        </h1>
       </div>
 
-      {/* Main stats */}
-      <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:12, marginBottom:24 }}>
-        <StatCard icon="💼" label="Oferta gjithsej"  value={stats.totalOffers}   col="#e8621a" />
-        <StatCard icon="✅" label="Projektet fituar" value={stats.acceptedOffers} col="#22d3a5" />
-        <StatCard icon="📊" label="Shkalla sukses"   value={`${stats.successRate}%`} col="#60a5fa" sub={`${stats.pendingOffers} në pritje`} />
-        <StatCard icon="💰" label="Të ardhura"       value={`€${stats.totalRevenue.toLocaleString()}`} col="#fbbf24" sub="nga ofertat e pranuara" />
+      {/* KPIs */}
+      <div className="kpi-grid" style={{ display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(165px,1fr))',gap:12 }}>
+        <KpiCard title="Ofertat dërguar"  value={stats.totalOffers}    icon="💼" color="#e8621a"  changeLabel="gjithsej" />
+        <KpiCard title="Të pranuara"      value={stats.acceptedOffers} icon="✅" color="#22d3a5"  changeLabel="oferta" />
+        <KpiCard title="Norma suksesit"   value={`${stats.successRate}%`} icon="🎯" color="#3b82f6" changeLabel="pranuar" />
+        <KpiCard title="Të ardhura"       value={`€${stats.totalEarnings.toLocaleString()}`} icon="💰" color="#fbbf24" changeLabel="totale" />
+        <KpiCard title="Çmimi mesatar"    value={`€${Math.round(stats.avgPrice).toLocaleString()}`} icon="📊" color="#a78bfa" changeLabel="për projekt" />
+        <KpiCard title="Vlerësimi"        value={stats.totalReviews>0?`${stats.rating.toFixed(1)}★`:'—'} icon="⭐" color="#fbbf24" changeLabel={`nga ${stats.totalReviews} reviews`} />
       </div>
 
-      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:16, marginBottom:16 }}>
+      {/* Charts row 1 */}
+      <div className="stats-2col" style={{ display:'grid',gridTemplateColumns:'1fr 1fr',gap:14 }}>
+        <TrendAreaChart data={trendData} title="📈 Ofertat — 6 muajt e fundit" color="#e8621a" name="Oferta" height={200} />
+        <StatsPieChart  data={cityData}  title="📍 Projektet sipas qytetit" height={200} />
+      </div>
 
-        {/* Offer breakdown donut-style */}
-        <div style={{ padding:'24px', background:'rgba(255,255,255,0.02)', border:'1px solid rgba(255,255,255,0.08)', borderRadius:18 }}>
-          <h3 style={{ fontFamily:"'Fraunces',serif", fontWeight:800, fontSize:'1rem', marginBottom:20 }}>📊 Breakdown i ofertave</h3>
-          <div style={{ display:'flex', flexDirection:'column', gap:12 }}>
-            {[
-              { label:'Pranuar',  count:stats.acceptedOffers, col:'#22d3a5' },
-              { label:'Në pritje',count:stats.pendingOffers,  col:'#fbbf24' },
-              { label:'Refuzuar', count:rejectedOffers,        col:'#f87171' },
-            ].map((r,i) => (
-              <div key={i} style={{ display:'flex', alignItems:'center', gap:12 }}>
-                <span style={{ fontSize:12, color:'rgba(232,234,240,0.5)', minWidth:70 }}>{r.label}</span>
-                <MiniBar val={r.count} max={stats.totalOffers} col={r.col} />
-                <span style={{ fontFamily:"'Fraunces',serif", fontWeight:800, fontSize:'1rem', color:r.col, minWidth:28, textAlign:'right' as const }}>{r.count}</span>
-              </div>
-            ))}
+      {/* Charts row 2 */}
+      <div className="stats-2col" style={{ display:'grid',gridTemplateColumns:'1fr 1fr',gap:14 }}>
+        <StatsBarChart data={trendData} title="📊 Volumet mujore" color="#22d3a5" name="Oferta" height={180} />
+        <ActivityFeed items={activityFeed} title="⚡ Aktiviteti i fundit" />
+      </div>
+
+      {/* Highlights */}
+      <div style={{ display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:14 }}>
+        {[
+          { label:'Norma e suksesit', value:`${stats.successRate}%`,            icon:'🎯', desc:'oferta të pranuara',    color:'#22d3a5' },
+          { label:'Në pritje',         value:stats.pendingOffers,               icon:'⏳', desc:'oferta pa përgjigje',   color:'#fbbf24' },
+          { label:'Aplikime aktive',   value:stats.activeApplications,          icon:'🔥', desc:'projekte të hapura',    color:'#e8621a' },
+        ].map((m,i) => (
+          <div key={i} style={{ background:'rgba(240,236,228,0.02)',border:'1px solid rgba(240,236,228,0.07)',borderRadius:16,padding:24,textAlign:'center',animation:`fadeUp 0.4s ease ${i*0.1}s both` }}>
+            <div style={{ fontSize:32,marginBottom:12 }}>{m.icon}</div>
+            <div style={{ fontFamily:"'Fraunces',serif",fontSize:'2.2rem',fontWeight:900,color:m.color,lineHeight:1,marginBottom:8 }}>{m.value}</div>
+            <div style={{ fontSize:13,fontWeight:700,color:'rgba(240,236,228,0.6)',marginBottom:4 }}>{m.label}</div>
+            <div style={{ fontSize:11,color:'rgba(240,236,228,0.3)' }}>{m.desc}</div>
           </div>
-
-          {/* Success rate circle */}
-          <div style={{ marginTop:24, display:'flex', alignItems:'center', gap:16, padding:'16px', background:'rgba(255,255,255,0.03)', borderRadius:12 }}>
-            <div style={{ width:64, height:64, borderRadius:'50%', background:`conic-gradient(#22d3a5 ${stats.successRate*3.6}deg, rgba(255,255,255,0.06) 0deg)`, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
-              <div style={{ width:50, height:50, borderRadius:'50%', background:'#080b12', display:'flex', alignItems:'center', justifyContent:'center', fontFamily:"'Fraunces',serif", fontWeight:900, fontSize:'1rem', color:'#22d3a5' }}>{stats.successRate}%</div>
-            </div>
-            <div>
-              <div style={{ fontWeight:700, fontSize:14, marginBottom:3 }}>Shkalla e suksesit</div>
-              <div style={{ fontSize:12, color:'rgba(232,234,240,0.4)', lineHeight:1.6 }}>{stats.acceptedOffers} nga {stats.totalOffers} oferta u pranuan</div>
-            </div>
-          </div>
-        </div>
-
-        {/* Rating */}
-        <div style={{ padding:'24px', background:'rgba(255,255,255,0.02)', border:'1px solid rgba(255,255,255,0.08)', borderRadius:18 }}>
-          <h3 style={{ fontFamily:"'Fraunces',serif", fontWeight:800, fontSize:'1rem', marginBottom:20 }}>⭐ Vlerësimet</h3>
-          {reviews.length === 0 ? (
-            <div style={{ textAlign:'center', padding:'40px 0', color:'rgba(232,234,240,0.3)' }}>
-              <div style={{ fontSize:36, marginBottom:10 }}>⭐</div>
-              <div style={{ fontSize:13 }}>Nuk ka vlerësime ende</div>
-            </div>
-          ) : (
-            <>
-              <div style={{ textAlign:'center', marginBottom:20 }}>
-                <div style={{ fontFamily:"'Fraunces',serif", fontSize:'3.5rem', fontWeight:900, color:'#fbbf24', lineHeight:1 }}>{company.rating_avg.toFixed(1)}</div>
-                <div style={{ display:'flex', justifyContent:'center', gap:3, margin:'8px 0' }}>
-                  {[1,2,3,4,5].map(s => <span key={s} style={{ fontSize:20, color: s<=Math.round(company.rating_avg) ? '#fbbf24' : 'rgba(255,255,255,0.1)' }}>★</span>)}
-                </div>
-                <div style={{ fontSize:13, color:'rgba(232,234,240,0.4)' }}>{reviews.length} vlerësime</div>
-              </div>
-              <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
-                {ratingBreak.map(r => (
-                  <div key={r.star} style={{ display:'flex', alignItems:'center', gap:10 }}>
-                    <span style={{ fontSize:11, color:'rgba(232,234,240,0.45)', minWidth:24 }}>{r.star}★</span>
-                    <MiniBar val={r.count} max={reviews.length} col={r.col} />
-                    <span style={{ fontSize:11, color:'rgba(232,234,240,0.4)', minWidth:20, textAlign:'right' as const }}>{r.count}</span>
-                  </div>
-                ))}
-              </div>
-            </>
-          )}
-        </div>
-      </div>
-
-      {/* Monthly chart */}
-      <div style={{ padding:'24px', background:'rgba(255,255,255,0.02)', border:'1px solid rgba(255,255,255,0.08)', borderRadius:18, marginBottom:16 }}>
-        <h3 style={{ fontFamily:"'Fraunces',serif", fontWeight:800, fontSize:'1rem', marginBottom:24 }}>📈 Aktiviteti — 6 muajt e fundit</h3>
-        <div style={{ display:'flex', alignItems:'flex-end', gap:12, height:120 }}>
-          {Object.entries(months).map(([month, data], i) => (
-            <div key={i} style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center', gap:6 }}>
-              <div style={{ width:'100%', display:'flex', flexDirection:'column', justifyContent:'flex-end', height:90, gap:3 }}>
-                {/* Won bar */}
-                <div style={{ width:'100%', height:Math.max(data.won/maxMonth*90, data.won>0?4:0), background:'linear-gradient(to top,#22d3a5,rgba(34,211,165,0.5))', borderRadius:'4px 4px 0 0', transition:'height 1s ease', minHeight:0 }} />
-                {/* Sent bar */}
-                <div style={{ width:'100%', height:Math.max((data.sent-data.won)/maxMonth*90, 0), background:'rgba(232,98,26,0.3)', borderRadius: data.won>0 ? '0' : '4px 4px 0 0', transition:'height 1s ease', minHeight:0 }} />
-              </div>
-              <span style={{ fontSize:10, color:'rgba(232,234,240,0.35)', fontWeight:600 }}>{month}</span>
-            </div>
-          ))}
-        </div>
-        <div style={{ display:'flex', gap:20, marginTop:14, justifyContent:'center' }}>
-          {[{ col:'#22d3a5', label:'Pranuar' }, { col:'rgba(232,98,26,0.5)', label:'Dërguar' }].map((l,i) => (
-            <div key={i} style={{ display:'flex', alignItems:'center', gap:6, fontSize:11, color:'rgba(232,234,240,0.45)' }}>
-              <div style={{ width:10, height:10, borderRadius:2, background:l.col }} />{l.label}
-            </div>
-          ))}
-        </div>
+        ))}
       </div>
 
       {/* Recent offers table */}
-      <div style={{ padding:'24px', background:'rgba(255,255,255,0.02)', border:'1px solid rgba(255,255,255,0.08)', borderRadius:18 }}>
-        <h3 style={{ fontFamily:"'Fraunces',serif", fontWeight:800, fontSize:'1rem', marginBottom:20 }}>🕐 Ofertat e fundit</h3>
-        {recentOffers.length === 0 ? (
-          <div style={{ textAlign:'center', padding:'30px 0', color:'rgba(232,234,240,0.3)', fontSize:13 }}>Nuk ka oferta ende</div>
-        ) : (
-          <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
-            {recentOffers.map((o,i) => {
-              const stCol = { accepted:'#22d3a5', pending:'#fbbf24', rejected:'#f87171' }[o.status] || '#64748b'
-              return (
-                <div key={o.id} style={{ display:'flex', alignItems:'center', gap:14, padding:'12px 16px', background:'rgba(255,255,255,0.02)', borderRadius:12, animation:`fadeUp 0.3s ease ${i*0.04}s both` }}>
-                  <div style={{ flex:1 }}>
-                    <div style={{ fontWeight:600, fontSize:13 }}>{o.applications?.title || '—'}</div>
-                    <div style={{ fontSize:11, color:'rgba(232,234,240,0.4)' }}>{o.applications?.city} · {new Date(o.created_at).toLocaleDateString('sq-AL')}</div>
-                  </div>
-                  <div style={{ fontFamily:"'Fraunces',serif", fontWeight:800, color:'#e8621a' }}>€{o.price.toLocaleString()}</div>
-                  <span style={{ fontSize:11, fontWeight:700, color:stCol, background:`${stCol}15`, border:`1px solid ${stCol}30`, borderRadius:7, padding:'3px 10px' }}>
-                    {{ accepted:'Pranuar', pending:'Pritje', rejected:'Refuzuar' }[o.status] || o.status}
-                  </span>
-                </div>
-              )
-            })}
+      {recentOffers.length > 0 && (
+        <div style={{ background:'rgba(240,236,228,0.02)',border:'1px solid rgba(240,236,228,0.07)',borderRadius:16,overflow:'hidden' }}>
+          <div style={{ padding:'14px 20px',borderBottom:'1px solid rgba(240,236,228,0.07)',fontSize:13,fontWeight:700,color:'rgba(240,236,228,0.6)' }}>
+            💼 Ofertat e fundit
           </div>
-        )}
-      </div>
+          <div style={{ display:'grid',gridTemplateColumns:'1fr 100px 90px 100px',gap:12,padding:'8px 20px',fontSize:10,fontWeight:700,color:'rgba(240,236,228,0.25)',textTransform:'uppercase',letterSpacing:'0.07em',borderBottom:'1px solid rgba(240,236,228,0.05)' }}>
+            <span>Projekti</span><span style={{textAlign:'center'}}>Çmimi</span><span style={{textAlign:'center'}}>Ditë</span><span style={{textAlign:'center'}}>Statusi</span>
+          </div>
+          {recentOffers.slice(0,8).map((o:any,i:number) => (
+            <div key={o.id} style={{ display:'grid',gridTemplateColumns:'1fr 100px 90px 100px',gap:12,padding:'12px 20px',borderBottom:i<7?'1px solid rgba(240,236,228,0.04)':'none',alignItems:'center',animation:`fadeUp 0.3s ease ${i*0.04}s both`,background:o.status==='accepted'?'rgba(34,211,165,0.03)':'transparent' }}>
+              <div style={{ fontSize:13,fontWeight:600,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap' }}>{o.applications?.title||'—'}</div>
+              <div style={{ textAlign:'center',fontFamily:"'Fraunces',serif",fontWeight:900,fontSize:'1rem',color:'#e8621a' }}>€{(o.price||0).toLocaleString()}</div>
+              <div style={{ textAlign:'center',fontSize:12,color:'rgba(240,236,228,0.5)' }}>{o.duration_days}d</div>
+              <div style={{ textAlign:'center' }}>
+                <span style={{ fontSize:10,fontWeight:800,padding:'3px 9px',borderRadius:6,background:o.status==='accepted'?'rgba(34,211,165,0.1)':o.status==='pending'?'rgba(251,191,36,0.1)':'rgba(248,113,113,0.1)',color:o.status==='accepted'?'#22d3a5':o.status==='pending'?'#fbbf24':'#f87171',border:`1px solid ${o.status==='accepted'?'rgba(34,211,165,0.2)':o.status==='pending'?'rgba(251,191,36,0.2)':'rgba(248,113,113,0.2)'}` }}>
+                  {o.status==='accepted'?'✅ Pranuar':o.status==='pending'?'⏳ Pritje':'❌ Refuzuar'}
+                </span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

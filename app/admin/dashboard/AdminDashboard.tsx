@@ -1,347 +1,350 @@
 'use client'
 
-import { useState } from 'react'
-import Sidebar       from '@/components/Sidebar'
+import { useState }  from 'react'
+import Link          from 'next/link'
+import PageShell     from '@/components/PageShell'
+import Avatar        from '@/components/Avatar'
+import StatusBadge   from '@/components/StatusBadge'
+import EmptyState    from '@/components/EmptyState'
+import { useToast }  from '@/components/Toast'
+import { KpiCard }   from '@/components/Analytics'
 
-interface AdminProfile { id: string; full_name: string; package_type: string }
-interface Company {
-  id: string; business_name: string; is_verified: boolean
-  rating_avg: number; package_type: string; created_at: string
-  profiles?: { full_name: string; city: string; created_at: string }
-}
-interface User {
-  id: string; full_name: string; city: string; role: string
-  package_type: string; created_at: string
+interface AdminProfile { id:string; full_name:string; package_type:string }
+interface Company { id:string; business_name:string; is_verified:boolean; rating_avg:number; package_type:string; created_at:string; profiles?:{full_name:string;city:string;avatar_url?:string}|any }
+interface User    { id:string; full_name:string; email?:string; role:string; city?:string; package_type:string; created_at:string }
+interface Application { id:string; title:string; city:string; status:string; offer_count:number; created_at:string; profiles?:{full_name:string}|any }
+
+interface Stats {
+  totalUsers:number; totalCompanies:number; totalApplications:number; totalOffers:number
+  totalReviews:number; verifiedCompanies:number; premiumUsers:number; newUsersWeek:number
 }
 
 interface Props {
-  adminProfile:       AdminProfile
-  initialCompanies:   Company[]
-  initialUsers:       User[]
-  totalApplications:  number
-  totalOffers:        number
+  adminProfile:      AdminProfile
+  initialCompanies:  Company[]
+  initialUsers:      User[]
+  recentApplications:Application[]
+  stats:             Stats
 }
 
-const ROLES = ['client', 'company', 'worker', 'admin']
-const ROLE_META: Record<string, { label: string; col: string }> = {
-  client:  { label: 'Klient',  col: '#60a5fa' },
-  company: { label: 'Kompani', col: '#e8621a' },
-  worker:  { label: 'Punëtor', col: '#22d3a5' },
-  admin:   { label: 'Admin',   col: '#a78bfa' },
+const ROLE_META: Record<string,{label:string;col:string;icon:string}> = {
+  client:  { label:'Klient',  col:'#60a5fa', icon:'👤' },
+  company: { label:'Kompani', col:'#e8621a', icon:'🏢' },
+  worker:  { label:'Punëtor', col:'#22d3a5', icon:'🔧' },
+  admin:   { label:'Admin',   col:'#a78bfa', icon:'⚡' },
 }
 
-export default function AdminDashboard({
-  adminProfile, initialCompanies, initialUsers,
-  totalApplications, totalOffers,
-}: Props) {
-  const [tab,       setTab]       = useState<'overview'|'companies'|'users'>('overview')
-  const [companies, setCompanies] = useState<Company[]>(initialCompanies)
-  const [users,     setUsers]     = useState<User[]>(initialUsers)
-  const [search,    setSearch]    = useState('')
-  const [toast,     setToast]     = useState<{ msg: string; ok: boolean } | null>(null)
-  const [loadingId, setLoadingId] = useState<string | null>(null)
+function timeAgo(d:string) {
+  const diff=Date.now()-new Date(d).getTime(), days=Math.floor(diff/86400000)
+  if(days===0)return'Sot'; if(days<7)return`${days}d`; if(days<30)return`${Math.floor(days/7)}j`; return`${Math.floor(days/30)}m`
+}
 
-  function showToast(msg: string, ok = true) {
-    setToast({ msg, ok })
-    setTimeout(() => setToast(null), 4000)
-  }
+export default function AdminDashboard({ adminProfile, initialCompanies, initialUsers, recentApplications, stats }: Props) {
+  const toast        = useToast()
+  const [tab,        setTab]        = useState<'overview'|'companies'|'users'|'apps'>('overview')
+  const [companies,  setCompanies]  = useState<Company[]>(initialCompanies)
+  const [search,     setSearch]     = useState('')
+  const [roleFilter, setRoleFilter] = useState('all')
+  const [loadingId,  setLoadingId]  = useState<string|null>(null)
 
-  // ── Verify / unverify company ─────────────
+  const verifyPct = stats.totalCompanies > 0 ? Math.round((stats.verifiedCompanies/stats.totalCompanies)*100) : 0
+  const premiumPct = stats.totalUsers > 0 ? Math.round((stats.premiumUsers/stats.totalUsers)*100) : 0
+
   async function toggleVerify(company: Company) {
     setLoadingId(company.id)
     try {
-      const res = await fetch('/api/admin/verify-company', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ company_id: company.id, is_verified: !company.is_verified }),
-      })
+      const res  = await fetch('/api/admin/verify-company', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({company_id:company.id, is_verified:!company.is_verified}) })
       const data = await res.json()
-      if (!res.ok) { showToast(data.error, false); return }
-      setCompanies(prev => prev.map(c => c.id === company.id ? { ...c, is_verified: !c.is_verified } : c))
-      showToast(company.is_verified ? `"${company.business_name}" u çverifikua.` : `"${company.business_name}" u verifikua! ✅`)
-    } catch {
-      showToast('Gabim lidhje.', false)
-    } finally {
-      setLoadingId(null)
-    }
+      if (!res.ok) { toast.error('Gabim', data.error); return }
+      setCompanies(prev => prev.map(c => c.id===company.id ? {...c, is_verified:!c.is_verified} : c))
+      company.is_verified
+        ? toast.info(`"${company.business_name}" u çverifikua.`)
+        : toast.success(`"${company.business_name}" u verifikua! 🏆`)
+    } finally { setLoadingId(null) }
   }
 
-  // ── Update user role ──────────────────────
-  async function updateRole(user: User, newRole: string) {
-    setLoadingId(user.id)
-    try {
-      const res = await fetch('/api/admin/update-role', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user_id: user.id, role: newRole }),
-      })
-      const data = await res.json()
-      if (!res.ok) { showToast(data.error, false); return }
-      setUsers(prev => prev.map(u => u.id === user.id ? { ...u, role: newRole } : u))
-      showToast(`Roli i "${user.full_name}" u ndryshua në ${newRole}. ✅`)
-    } catch {
-      showToast('Gabim lidhje.', false)
-    } finally {
-      setLoadingId(null)
-    }
+  async function updateRole(userId: string, newRole: string) {
+    const res = await fetch('/api/admin/update-role', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({user_id:userId, role:newRole}) })
+    if (res.ok) toast.success('Roli u ndryshua!', `Useri tani është ${newRole}`) 
+    else toast.error('Gabim', 'Nuk u ndryshua roli')
   }
 
-  const filteredCompanies = companies.filter(c =>
-    c.business_name.toLowerCase().includes(search.toLowerCase()) ||
-    c.profiles?.full_name.toLowerCase().includes(search.toLowerCase())
+  const filteredCompanies = companies.filter(c => c.business_name.toLowerCase().includes(search.toLowerCase()) || (c.profiles as any)?.city?.toLowerCase().includes(search.toLowerCase()))
+  const filteredUsers     = initialUsers.filter(u =>
+    (u.full_name||'').toLowerCase().includes(search.toLowerCase()) &&
+    (roleFilter==='all' || u.role===roleFilter)
   )
 
-  const filteredUsers = users.filter(u =>
-    u.full_name.toLowerCase().includes(search.toLowerCase()) ||
-    u.city?.toLowerCase().includes(search.toLowerCase())
-  )
-
-  const stats = {
-    totalUsers:     users.length,
-    totalCompanies: companies.length,
-    verified:       companies.filter(c => c.is_verified).length,
-    pending:        companies.filter(c => !c.is_verified).length,
-  }
+  const TABS = [
+    { id:'overview',  label:'Pasqyra',  icon:'📊' },
+    { id:'companies', label:'Kompanit', icon:'🏢', count:companies.length },
+    { id:'users',     label:'Userët',   icon:'👥', count:initialUsers.length },
+    { id:'apps',      label:'Aplikime', icon:'📋', count:recentApplications.length },
+  ]
 
   return (
-    <div style={{ minHeight: '100vh', background: '#080b12', color: '#e8eaf0', fontFamily: "'DM Sans','Helvetica Neue',sans-serif", display: 'flex' }}>
+    <PageShell role="admin" userName={adminProfile.full_name} userId={adminProfile.id} package={adminProfile.package_type} pageTitle="Dashboard" pageIcon="⚡">
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:ital,opsz,wght@0,9..144,700;0,9..144,900&display=swap');
-        @keyframes fadeUp { from{opacity:0;transform:translateY(12px)} to{opacity:1;transform:translateY(0)} }
-        @keyframes spin   { to{transform:rotate(360deg)} }
-        @keyframes pulse  { 0%,100%{opacity:1} 50%{opacity:.4} }
-        * { box-sizing:border-box; }
-        ::-webkit-scrollbar { width:4px; }
-        ::-webkit-scrollbar-thumb { background:rgba(255,255,255,0.08); border-radius:4px; }
-        .row:hover { background:rgba(255,255,255,0.04) !important; }
-        .verify-btn:hover { opacity:.85 !important; }
-        select option { background:#1a1f2e; color:#e8eaf0; }
+        @keyframes fadeUp { from{opacity:0;transform:translateY(10px)} to{opacity:1;transform:translateY(0)} }
+        @keyframes pulse  { 0%,100%{opacity:1} 50%{opacity:.5} }
+        .admin-row:hover  { background:rgba(240,236,228,0.04)!important; }
+        .admin-row        { transition:background 0.15s; }
+        .tab-btn:hover    { color:rgba(240,236,228,0.8)!important; }
+        .verify-btn:hover { opacity:.88!important; transform:translateY(-1px); }
       `}</style>
 
-      <Sidebar role="admin" userName={adminProfile.full_name} package={adminProfile.package_type} />
-
-      <div style={{ flex: 1, overflowY: 'auto', minWidth: 0 }}>
-
-        {/* Toast */}
-        {toast && (
-          <div style={{ position: 'fixed', top: 20, right: 20, zIndex: 600, background: toast.ok ? 'rgba(34,211,165,0.1)' : 'rgba(239,68,68,0.1)', border: `1px solid ${toast.ok ? 'rgba(34,211,165,0.3)' : 'rgba(239,68,68,0.3)'}`, color: toast.ok ? '#22d3a5' : '#f87171', padding: '14px 22px', borderRadius: 13, fontSize: 14, fontWeight: 600, boxShadow: '0 12px 40px rgba(0,0,0,0.4)', animation: 'fadeUp 0.3s ease' }}>
-            {toast.msg}
+      {/* Global KPIs */}
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(155px,1fr))', gap:12, marginBottom:28 }}>
+        {[
+          { title:'Përdorues',     value:stats.totalUsers,        icon:'👥', color:'#60a5fa', label:`+${stats.newUsersWeek} këtë javë`  },
+          { title:'Kompani',       value:stats.totalCompanies,    icon:'🏢', color:'#e8621a', label:`${verifyPct}% të verifikuara`        },
+          { title:'Aplikime',      value:stats.totalApplications, icon:'📋', color:'#22d3a5', label:'projekte totale'                    },
+          { title:'Oferta',        value:stats.totalOffers,       icon:'💼', color:'#fbbf24', label:'bids dërguar'                       },
+          { title:'Reviews',       value:stats.totalReviews,      icon:'⭐', color:'#fbbf24', label:'vlerësime'                          },
+          { title:'Premium',       value:stats.premiumUsers,      icon:'💎', color:'#a78bfa', label:`${premiumPct}% e bazës`             },
+          { title:'Të verifikuara',value:stats.verifiedCompanies, icon:'✅', color:'#22d3a5', label:'kompani aktive'                     },
+          { title:'Kjo javë',      value:stats.newUsersWeek,      icon:'🔥', color:'#f87171', label:'regjistrime të reja'                },
+        ].map((kpi,i) => (
+          <div key={i} style={{ padding:'16px 18px', background:'rgba(240,236,228,0.02)', border:'1px solid rgba(240,236,228,0.07)', borderRadius:16, animation:`fadeUp 0.4s ease ${i*0.05}s both` }}>
+            <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:10 }}>
+              <span style={{ fontSize:16 }}>{kpi.icon}</span>
+              <span style={{ fontSize:11, color:'rgba(240,236,228,0.4)', fontWeight:600 }}>{kpi.title}</span>
+            </div>
+            <div style={{ fontFamily:"'Fraunces',serif", fontSize:'1.7rem', fontWeight:900, color:kpi.color, lineHeight:1, marginBottom:6 }}>{kpi.value.toLocaleString()}</div>
+            <div style={{ fontSize:11, color:'rgba(240,236,228,0.3)' }}>{kpi.label}</div>
           </div>
-        )}
+        ))}
+      </div>
 
-        {/* Top bar */}
-        <div style={{ position: 'sticky', top: 0, zIndex: 50, background: 'rgba(8,11,18,0.9)', backdropFilter: 'blur(16px)', borderBottom: '1px solid rgba(255,255,255,0.06)', padding: '0 32px', height: 58, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <div style={{ width: 7, height: 7, borderRadius: '50%', background: '#a78bfa', boxShadow: '0 0 8px #a78bfa' }} />
-            <span style={{ fontSize: 13, fontWeight: 600, color: 'rgba(232,234,240,0.6)' }}>Admin Panel</span>
+      {/* Platform health bar */}
+      <div style={{ marginBottom:24, padding:'18px 22px', background:'rgba(240,236,228,0.02)', border:'1px solid rgba(240,236,228,0.07)', borderRadius:16, animation:'fadeUp 0.5s ease 0.1s both' }}>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:14 }}>
+          <div style={{ fontSize:13, fontWeight:700 }}>🏥 Shëndeti i platformës</div>
+          <div style={{ fontSize:12, color:'rgba(240,236,228,0.4)' }}>Live</div>
+        </div>
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:12 }}>
+          {[
+            { label:'Kompani aktive',    val:verifyPct,  col:'#e8621a' },
+            { label:'Userë premium',     val:premiumPct, col:'#a78bfa' },
+            { label:'Oferta/Aplikime',   val:stats.totalApplications>0?Math.min(100,Math.round((stats.totalOffers/stats.totalApplications)*100)):0, col:'#22d3a5' },
+            { label:'Sukses overall',    val:stats.totalOffers>0?Math.min(100,Math.round((stats.totalReviews/stats.totalOffers)*80)):0, col:'#fbbf24' },
+          ].map((m,i) => (
+            <div key={i}>
+              <div style={{ display:'flex', justifyContent:'space-between', fontSize:11, color:'rgba(240,236,228,0.45)', marginBottom:5 }}>
+                <span>{m.label}</span><span style={{ fontWeight:700, color:m.col }}>{m.val}%</span>
+              </div>
+              <div style={{ height:5, background:'rgba(240,236,228,0.06)', borderRadius:10, overflow:'hidden' }}>
+                <div style={{ height:'100%', width:`${m.val}%`, background:m.col, borderRadius:10, transition:'width 1s ease', boxShadow:`0 0 8px ${m.col}60` }}/>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <div style={{ display:'flex', gap:4, background:'rgba(240,236,228,0.04)', padding:4, borderRadius:14, border:'1px solid rgba(240,236,228,0.07)', marginBottom:20, overflowX:'auto' }}>
+        {TABS.map(t => (
+          <button key={t.id} className="tab-btn" onClick={() => setTab(t.id as any)}
+            style={{ padding:'9px 18px', borderRadius:11, border:'none', fontSize:13, fontWeight:700, cursor:'pointer', fontFamily:'inherit', background:tab===t.id?'rgba(240,236,228,0.1)':'transparent', color:tab===t.id?'#f0ece4':'rgba(240,236,228,0.4)', transition:'all 0.2s', display:'flex', alignItems:'center', gap:6, whiteSpace:'nowrap' }}>
+            {t.icon} {t.label}
+            {t.count !== undefined && <span style={{ fontSize:11, fontWeight:800, background:'rgba(240,236,228,0.1)', borderRadius:20, padding:'1px 8px', color:'rgba(240,236,228,0.5)' }}>{t.count}</span>}
+          </button>
+        ))}
+      </div>
+
+      {/* Search (shared) */}
+      {tab !== 'overview' && (
+        <div style={{ display:'flex', gap:10, marginBottom:16, flexWrap:'wrap', alignItems:'center' }}>
+          <div style={{ flex:1, minWidth:200, position:'relative' }}>
+            <span style={{ position:'absolute', left:10, top:'50%', transform:'translateY(-50%)', opacity:0.35, fontSize:13 }}>🔍</span>
+            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Kërko..."
+              style={{ width:'100%', background:'rgba(240,236,228,0.04)', border:'1px solid rgba(240,236,228,0.08)', borderRadius:10, padding:'9px 12px 9px 30px', fontSize:13, color:'#f0ece4', fontFamily:'inherit', outline:'none', boxSizing:'border-box' }}/>
+          </div>
+          {tab === 'users' && (
+            <div style={{ display:'flex', gap:4, background:'rgba(240,236,228,0.04)', padding:4, borderRadius:10, border:'1px solid rgba(240,236,228,0.07)' }}>
+              {['all','client','company','worker','admin'].map(r => (
+                <button key={r} onClick={() => setRoleFilter(r)}
+                  style={{ padding:'6px 12px', borderRadius:8, border:'none', fontSize:11, fontWeight:700, cursor:'pointer', fontFamily:'inherit', background:roleFilter===r?'#e8621a':'transparent', color:roleFilter===r?'#fff':'rgba(240,236,228,0.45)', transition:'all 0.2s', whiteSpace:'nowrap' }}>
+                  {r==='all'?'Të gjitha':ROLE_META[r]?.icon+' '+ROLE_META[r]?.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── OVERVIEW TAB ── */}
+      {tab === 'overview' && (
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:16 }}>
+          {/* Recent registrations */}
+          <div style={{ background:'rgba(240,236,228,0.02)', border:'1px solid rgba(240,236,228,0.07)', borderRadius:16, overflow:'hidden' }}>
+            <div style={{ padding:'14px 18px', borderBottom:'1px solid rgba(240,236,228,0.06)', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+              <span style={{ fontSize:13, fontWeight:700 }}>👥 Regjistrime të reja</span>
+              <Link href="#" onClick={() => setTab('users')} style={{ fontSize:11, color:'#e8621a', fontWeight:700, textDecoration:'none' }}>Shiko të gjitha</Link>
+            </div>
+            {initialUsers.slice(0,6).map((u,i) => {
+              const rm = ROLE_META[u.role] || ROLE_META.client
+              return (
+                <div key={u.id} className="admin-row" style={{ padding:'12px 18px', borderBottom:i<5?'1px solid rgba(240,236,228,0.04)':'none', display:'flex', gap:10, alignItems:'center', animation:`fadeUp 0.3s ease ${i*0.05}s both` }}>
+                  <Avatar name={u.full_name||'U'} size={34} borderRadius={10}/>
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <div style={{ fontSize:13, fontWeight:600, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{u.full_name||'Pa emër'}</div>
+                    <div style={{ fontSize:11, color:'rgba(240,236,228,0.35)' }}>📍 {u.city||'—'} · {timeAgo(u.created_at)}</div>
+                  </div>
+                  <span style={{ fontSize:10, fontWeight:800, color:rm.col, background:`${rm.col}12`, border:`1px solid ${rm.col}25`, borderRadius:6, padding:'2px 8px', whiteSpace:'nowrap' }}>{rm.icon} {rm.label}</span>
+                </div>
+              )
+            })}
           </div>
 
-          {/* Tab switcher */}
-          <div style={{ display: 'flex', gap: 3, background: 'rgba(255,255,255,0.05)', padding: 4, borderRadius: 12, border: '1px solid rgba(255,255,255,0.07)' }}>
-            {([['overview','📊 Overview'],['companies','🏢 Kompanitë'],['users','👥 Përdoruesit']] as const).map(([id, label]) => (
-              <button key={id} onClick={() => { setTab(id); setSearch('') }}
-                style={{ padding: '8px 16px', borderRadius: 9, border: 'none', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', background: tab === id ? '#a78bfa' : 'transparent', color: tab === id ? '#fff' : 'rgba(232,234,240,0.45)', transition: 'all 0.2s' }}>
-                {label}
-              </button>
+          {/* Recent applications */}
+          <div style={{ background:'rgba(240,236,228,0.02)', border:'1px solid rgba(240,236,228,0.07)', borderRadius:16, overflow:'hidden' }}>
+            <div style={{ padding:'14px 18px', borderBottom:'1px solid rgba(240,236,228,0.06)', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+              <span style={{ fontSize:13, fontWeight:700 }}>📋 Aplikimet e fundit</span>
+              <Link href="#" onClick={() => setTab('apps')} style={{ fontSize:11, color:'#e8621a', fontWeight:700, textDecoration:'none' }}>Shiko të gjitha</Link>
+            </div>
+            {recentApplications.slice(0,6).map((a,i) => (
+              <div key={a.id} className="admin-row" style={{ padding:'12px 18px', borderBottom:i<5?'1px solid rgba(240,236,228,0.04)':'none', display:'flex', gap:10, alignItems:'center', animation:`fadeUp 0.3s ease ${i*0.05}s both` }}>
+                <div style={{ width:34, height:34, borderRadius:10, background:'rgba(34,211,165,0.1)', border:'1px solid rgba(34,211,165,0.15)', display:'flex', alignItems:'center', justifyContent:'center', fontSize:14, flexShrink:0 }}>📋</div>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ fontSize:13, fontWeight:600, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{a.title}</div>
+                  <div style={{ fontSize:11, color:'rgba(240,236,228,0.35)' }}>📍 {a.city} · {a.offer_count} oferta · {timeAgo(a.created_at)}</div>
+                </div>
+                <StatusBadge status={a.status} size="xs"/>
+              </div>
+            ))}
+          </div>
+
+          {/* Quick links */}
+          <div style={{ gridColumn:'1/-1', display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(180px,1fr))', gap:10 }}>
+            {[
+              { href:'/admin/companies',    icon:'🏢', label:'Menaxho kompanit',     desc:'Verifiko & moderо' },
+              { href:'/admin/users',        icon:'👥', label:'Menaxho userët',        desc:'Ndrysho role' },
+              { href:'/admin/applications', icon:'📋', label:'Të gjitha aplikimet',   desc:'Monitorim i plotë' },
+              { href:'/admin/offers',       icon:'💼', label:'Të gjitha ofertat',     desc:'Shiko trendet' },
+              { href:'/admin/stats',        icon:'📊', label:'Statistikat globale',   desc:'Analytics avancuar' },
+              { href:'/admin/settings',     icon:'⚙️', label:'Cilësimet e sistemit',  desc:'Konfigurim' },
+            ].map(item => (
+              <Link key={item.href} href={item.href}
+                style={{ padding:'16px', background:'rgba(240,236,228,0.02)', border:'1px solid rgba(240,236,228,0.07)', borderRadius:14, textDecoration:'none', transition:'all 0.2s', display:'block' }}
+                onMouseEnter={e=>(e.currentTarget.style.borderColor='rgba(240,236,228,0.14)')}
+                onMouseLeave={e=>(e.currentTarget.style.borderColor='rgba(240,236,228,0.07)')}>
+                <div style={{ fontSize:22, marginBottom:8 }}>{item.icon}</div>
+                <div style={{ fontSize:13, fontWeight:700, color:'#f0ece4', marginBottom:3 }}>{item.label}</div>
+                <div style={{ fontSize:11, color:'rgba(240,236,228,0.3)' }}>{item.desc}</div>
+              </Link>
             ))}
           </div>
         </div>
+      )}
 
-        <div style={{ padding: '32px 32px 48px' }}>
-
-          {/* Header */}
-          <div style={{ marginBottom: 32, animation: 'fadeUp 0.4s ease' }}>
-            <p style={{ fontSize: 12, fontWeight: 700, color: 'rgba(232,234,240,0.3)', textTransform: 'uppercase', letterSpacing: '0.12em', marginBottom: 8 }}>Administrator</p>
-            <h1 style={{ fontFamily: "'Fraunces',serif", fontSize: '2rem', fontWeight: 900, letterSpacing: '-0.03em', marginBottom: 6 }}>
-              Paneli i <span style={{ color: '#a78bfa', fontStyle: 'italic' }}>Kontrollit</span>
-            </h1>
-            <p style={{ fontSize: 14, color: 'rgba(232,234,240,0.4)' }}>Menaxho kompanitë, rolet dhe platformën</p>
+      {/* ── COMPANIES TAB ── */}
+      {tab === 'companies' && (
+        <div>
+          <div style={{ marginBottom:10, fontSize:12, color:'rgba(240,236,228,0.35)' }}>{filteredCompanies.length} kompani</div>
+          <div style={{ display:'grid', gridTemplateColumns:'2fr 120px 100px 110px 130px', gap:12, padding:'8px 16px', fontSize:10, fontWeight:700, color:'rgba(240,236,228,0.25)', textTransform:'uppercase', letterSpacing:'0.07em', borderBottom:'1px solid rgba(240,236,228,0.05)', marginBottom:4 }}>
+            <span>Kompania</span><span style={{textAlign:'center'}}>Plani</span><span style={{textAlign:'center'}}>Rating</span><span style={{textAlign:'center'}}>Statusi</span><span style={{textAlign:'center'}}>Veprimi</span>
           </div>
-
-          {/* ── OVERVIEW ────────────────────── */}
-          {tab === 'overview' && (
-            <div style={{ animation: 'fadeUp 0.4s ease' }}>
-              {/* Stats grid */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 14, marginBottom: 32 }}>
-                {[
-                  { label: 'Përdorues total',   val: stats.totalUsers,     icon: '👥', col: '#60a5fa' },
-                  { label: 'Kompani',            val: stats.totalCompanies, icon: '🏢', col: '#e8621a' },
-                  { label: 'Aplikimet',          val: totalApplications,    icon: '📋', col: '#22d3a5' },
-                  { label: 'Ofertat',            val: totalOffers,          icon: '💼', col: '#fbbf24' },
-                ].map((s, i) => (
-                  <div key={i} style={{ padding: '22px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 18, position: 'relative', overflow: 'hidden', animation: `fadeUp 0.4s ease ${i * 0.07}s both` }}>
-                    <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 3, background: `linear-gradient(90deg,${s.col},${s.col}44)` }} />
-                    <div style={{ fontSize: 26, marginBottom: 12 }}>{s.icon}</div>
-                    <div style={{ fontFamily: "'Fraunces',serif", fontSize: '2.2rem', fontWeight: 900, color: s.col, lineHeight: 1, marginBottom: 6 }}>{s.val}</div>
-                    <div style={{ fontSize: 11, fontWeight: 600, color: 'rgba(232,234,240,0.4)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{s.label}</div>
+          {filteredCompanies.length === 0 ? <EmptyState icon="🔍" title="Nuk u gjet" message="Provo kërkim tjetër." size="sm"/> : (
+            filteredCompanies.map((c,i) => (
+              <div key={c.id} className="admin-row" style={{ display:'grid', gridTemplateColumns:'2fr 120px 100px 110px 130px', gap:12, padding:'13px 16px', borderBottom:`1px solid rgba(240,236,228,0.05)`, alignItems:'center', animation:`fadeUp 0.3s ease ${i*0.04}s both` }}>
+                <div style={{ display:'flex', gap:10, alignItems:'center' }}>
+                  <Avatar name={c.business_name||'K'} size={36} borderRadius={10}/>
+                  <div>
+                    <div style={{ fontSize:13, fontWeight:700, display:'flex', alignItems:'center', gap:6 }}>
+                      {c.business_name}
+                      {c.is_verified && <span style={{ fontSize:9, color:'#22d3a5', background:'rgba(34,211,165,0.1)', border:'1px solid rgba(34,211,165,0.2)', borderRadius:5, padding:'2px 6px', fontWeight:800 }}>✓ VER</span>}
+                    </div>
+                    <div style={{ fontSize:11, color:'rgba(240,236,228,0.35)' }}>📍 {(c.profiles as any)?.city||'—'} · {timeAgo(c.created_at)}</div>
                   </div>
-                ))}
-              </div>
-
-              {/* Pending verifications alert */}
-              {stats.pending > 0 && (
-                <div style={{ padding: '18px 22px', background: 'rgba(251,191,36,0.07)', border: '1px solid rgba(251,191,36,0.2)', borderRadius: 16, marginBottom: 24, display: 'flex', alignItems: 'center', gap: 16 }}>
-                  <div style={{ width: 44, height: 44, borderRadius: 12, background: 'rgba(251,191,36,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, flexShrink: 0 }}>⏳</div>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontWeight: 700, color: '#fbbf24', marginBottom: 4 }}>{stats.pending} kompani presin verifikim</div>
-                    <p style={{ fontSize: 13, color: 'rgba(232,234,240,0.5)', lineHeight: 1.6 }}>Shko tek "Kompanitë" për të verifikuar apo refuzuar kërkesat e reja.</p>
-                  </div>
-                  <button onClick={() => setTab('companies')}
-                    style={{ padding: '9px 18px', borderRadius: 10, background: '#fbbf24', border: 'none', color: '#000', fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'inherit', flexShrink: 0 }}>
-                    Shiko →
+                </div>
+                <div style={{ textAlign:'center' }}>
+                  <span style={{ fontSize:10, fontWeight:800, color:c.package_type==='premium'?'#a78bfa':'rgba(240,236,228,0.4)', background:c.package_type==='premium'?'rgba(167,139,250,0.1)':'rgba(240,236,228,0.04)', borderRadius:6, padding:'3px 10px', border:`1px solid ${c.package_type==='premium'?'rgba(167,139,250,0.2)':'rgba(240,236,228,0.07)'}` }}>
+                    {c.package_type==='premium'?'💎 Premium':'⚪ Falas'}
+                  </span>
+                </div>
+                <div style={{ textAlign:'center', fontFamily:"'Fraunces',serif", fontWeight:900, fontSize:'1rem', color:'#fbbf24' }}>
+                  {c.rating_avg > 0 ? `★ ${c.rating_avg.toFixed(1)}` : '—'}
+                </div>
+                <div style={{ textAlign:'center' }}>
+                  <span style={{ fontSize:10, fontWeight:800, padding:'3px 10px', borderRadius:6, background:c.is_verified?'rgba(34,211,165,0.1)':'rgba(251,191,36,0.08)', color:c.is_verified?'#22d3a5':'#fbbf24', border:`1px solid ${c.is_verified?'rgba(34,211,165,0.2)':'rgba(251,191,36,0.2)'}` }}>
+                    {c.is_verified ? '✅ Verifikuar' : '⏳ Pritje'}
+                  </span>
+                </div>
+                <div style={{ textAlign:'center' }}>
+                  <button className="verify-btn" onClick={() => toggleVerify(c)} disabled={loadingId===c.id}
+                    style={{ padding:'7px 14px', borderRadius:9, border:'none', fontSize:11, fontWeight:800, cursor:'pointer', fontFamily:'inherit', background:c.is_verified?'rgba(248,113,113,0.1)':'rgba(34,211,165,0.1)', color:c.is_verified?'#f87171':'#22d3a5', border:`1px solid ${c.is_verified?'rgba(248,113,113,0.2)':'rgba(34,211,165,0.2)'}`, transition:'all 0.2s', whiteSpace:'nowrap' }}>
+                    {loadingId===c.id ? '...' : c.is_verified ? '✕ Çverifiko' : '✓ Verifiko'}
                   </button>
                 </div>
-              )}
-
-              {/* Role breakdown */}
-              <div style={{ padding: '24px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 18 }}>
-                <h3 style={{ fontFamily: "'Fraunces',serif", fontWeight: 800, fontSize: '1.05rem', marginBottom: 20 }}>Përdorues sipas rolit</h3>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12 }}>
-                  {ROLES.map(role => {
-                    const count = users.filter(u => u.role === role).length
-                    const meta  = ROLE_META[role]
-                    const pct   = users.length > 0 ? Math.round((count / users.length) * 100) : 0
-                    return (
-                      <div key={role} style={{ padding: '16px', background: 'rgba(255,255,255,0.03)', border: `1px solid ${meta.col}25`, borderRadius: 14 }}>
-                        <div style={{ fontSize: 11, fontWeight: 700, color: meta.col, textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 8 }}>{meta.label}</div>
-                        <div style={{ fontFamily: "'Fraunces',serif", fontSize: '1.8rem', fontWeight: 900, color: meta.col, lineHeight: 1, marginBottom: 10 }}>{count}</div>
-                        <div style={{ height: 4, background: 'rgba(255,255,255,0.07)', borderRadius: 2 }}>
-                          <div style={{ height: '100%', width: `${pct}%`, background: meta.col, borderRadius: 2, transition: 'width 1s ease' }} />
-                        </div>
-                        <div style={{ fontSize: 11, color: 'rgba(232,234,240,0.35)', marginTop: 5 }}>{pct}%</div>
-                      </div>
-                    )
-                  })}
-                </div>
               </div>
-            </div>
-          )}
-
-          {/* ── COMPANIES ───────────────────── */}
-          {tab === 'companies' && (
-            <div style={{ animation: 'fadeUp 0.4s ease' }}>
-              {/* Search + stats */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
-                <div style={{ flex: 1, position: 'relative' as const }}>
-                  <span style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', opacity: 0.4 }}>🔍</span>
-                  <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Kërko kompani..."
-                    style={{ width: '100%', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.09)', borderRadius: 11, padding: '10px 14px 10px 36px', fontSize: 13, color: '#e8eaf0', fontFamily: 'inherit', outline: 'none' }} />
-                </div>
-                <div style={{ display: 'flex', gap: 10 }}>
-                  {[{ l: 'Total', v: stats.totalCompanies, c: '#e8eaf0' }, { l: 'Verifikuar', v: stats.verified, c: '#22d3a5' }, { l: 'Në pritje', v: stats.pending, c: '#fbbf24' }].map(s => (
-                    <div key={s.l} style={{ padding: '8px 16px', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 10, textAlign: 'center' as const }}>
-                      <div style={{ fontFamily: "'Fraunces',serif", fontWeight: 900, fontSize: '1.2rem', color: s.c }}>{s.v}</div>
-                      <div style={{ fontSize: 11, color: 'rgba(232,234,240,0.4)' }}>{s.l}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Table header */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 160px 120px 100px 140px', gap: 12, padding: '8px 18px', fontSize: 11, fontWeight: 700, color: 'rgba(232,234,240,0.3)', textTransform: 'uppercase' as const, letterSpacing: '0.07em', marginBottom: 6 }}>
-                <span>Kompania</span><span>Pronari</span><span>Paketa</span><span>Statusi</span><span>Veprimi</span>
-              </div>
-
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {filteredCompanies.length === 0 ? (
-                  <div style={{ textAlign: 'center', padding: '60px 20px', color: 'rgba(232,234,240,0.3)' }}>
-                    <div style={{ fontSize: 44, marginBottom: 12 }}>🏢</div>
-                    <div style={{ fontWeight: 700 }}>Nuk u gjet asnjë kompani</div>
-                  </div>
-                ) : filteredCompanies.map((company, i) => (
-                  <div key={company.id} className="row"
-                    style={{ display: 'grid', gridTemplateColumns: '1fr 160px 120px 100px 140px', gap: 12, padding: '16px 18px', background: 'rgba(255,255,255,0.02)', border: `1px solid ${!company.is_verified ? 'rgba(251,191,36,0.15)' : 'rgba(255,255,255,0.07)'}`, borderRadius: 14, alignItems: 'center', animation: `fadeUp 0.3s ease ${i * 0.04}s both`, transition: 'background 0.15s' }}>
-
-                    <div>
-                      <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 3 }}>{company.business_name}</div>
-                      <div style={{ fontSize: 12, color: 'rgba(232,234,240,0.4)' }}>
-                        📅 {new Date(company.created_at).toLocaleDateString('sq-AL')}
-                        {company.rating_avg > 0 && ` · ⭐ ${company.rating_avg.toFixed(1)}`}
-                      </div>
-                    </div>
-
-                    <div>
-                      <div style={{ fontSize: 13, fontWeight: 600 }}>{company.profiles?.full_name || '—'}</div>
-                      <div style={{ fontSize: 11, color: 'rgba(232,234,240,0.4)' }}>{company.profiles?.city || ''}</div>
-                    </div>
-
-                    <span style={{ fontSize: 11, fontWeight: 700, color: company.package_type !== 'free' ? '#fbbf24' : 'rgba(232,234,240,0.4)', background: company.package_type !== 'free' ? 'rgba(251,191,36,0.1)' : 'rgba(255,255,255,0.05)', border: `1px solid ${company.package_type !== 'free' ? 'rgba(251,191,36,0.25)' : 'rgba(255,255,255,0.08)'}`, borderRadius: 6, padding: '3px 10px', display: 'inline-block' }}>
-                      {company.package_type !== 'free' ? '💎 Premium' : '🆓 Falas'}
-                    </span>
-
-                    <span style={{ fontSize: 11, fontWeight: 700, color: company.is_verified ? '#22d3a5' : '#fbbf24', background: company.is_verified ? 'rgba(34,211,165,0.1)' : 'rgba(251,191,36,0.1)', border: `1px solid ${company.is_verified ? 'rgba(34,211,165,0.25)' : 'rgba(251,191,36,0.25)'}`, borderRadius: 6, padding: '4px 10px', display: 'inline-block' }}>
-                      {company.is_verified ? '✓ Verifikuar' : '⏳ Në pritje'}
-                    </span>
-
-                    <button className="verify-btn"
-                      onClick={() => toggleVerify(company)}
-                      disabled={loadingId === company.id}
-                      style={{ padding: '9px 16px', borderRadius: 10, border: 'none', fontFamily: 'inherit', fontSize: 12, fontWeight: 700, cursor: loadingId === company.id ? 'not-allowed' : 'pointer', background: company.is_verified ? 'rgba(239,68,68,0.12)' : 'rgba(34,211,165,0.12)', color: company.is_verified ? '#f87171' : '#22d3a5', border: `1px solid ${company.is_verified ? 'rgba(239,68,68,0.25)' : 'rgba(34,211,165,0.25)'}`, transition: 'all 0.2s', display: 'flex', alignItems: 'center', gap: 6 }}>
-                      {loadingId === company.id ? (
-                        <div style={{ width: 12, height: 12, border: '2px solid rgba(255,255,255,0.2)', borderTop: '2px solid currentColor', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
-                      ) : company.is_verified ? '✕ Hiq verifikimin' : '✓ Verifiko'}
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* ── USERS ───────────────────────── */}
-          {tab === 'users' && (
-            <div style={{ animation: 'fadeUp 0.4s ease' }}>
-              <div style={{ position: 'relative' as const, marginBottom: 20 }}>
-                <span style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', opacity: 0.4 }}>🔍</span>
-                <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Kërko sipas emrit ose qytetit..."
-                  style={{ width: '100%', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.09)', borderRadius: 11, padding: '10px 14px 10px 36px', fontSize: 13, color: '#e8eaf0', fontFamily: 'inherit', outline: 'none' }} />
-              </div>
-
-              {/* Table header */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 120px 120px 150px', gap: 12, padding: '8px 18px', fontSize: 11, fontWeight: 700, color: 'rgba(232,234,240,0.3)', textTransform: 'uppercase' as const, letterSpacing: '0.07em', marginBottom: 6 }}>
-                <span>Përdoruesi</span><span>Qyteti</span><span>Regjistrimi</span><span>Roli</span>
-              </div>
-
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {filteredUsers.map((user, i) => {
-                  const meta = ROLE_META[user.role] || ROLE_META.client
-                  return (
-                    <div key={user.id} className="row"
-                      style={{ display: 'grid', gridTemplateColumns: '1fr 120px 120px 150px', gap: 12, padding: '14px 18px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 14, alignItems: 'center', animation: `fadeUp 0.3s ease ${i * 0.03}s both`, transition: 'background 0.15s' }}>
-
-                      <div>
-                        <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 2 }}>{user.full_name}</div>
-                        <div style={{ fontSize: 11, color: 'rgba(232,234,240,0.35)', fontFamily: 'monospace' }}>{user.id.slice(0,16)}…</div>
-                      </div>
-
-                      <span style={{ fontSize: 13, color: 'rgba(232,234,240,0.5)' }}>📍 {user.city || '—'}</span>
-
-                      <span style={{ fontSize: 12, color: 'rgba(232,234,240,0.4)' }}>
-                        {new Date(user.created_at).toLocaleDateString('sq-AL')}
-                      </span>
-
-                      {/* Role selector */}
-                      <div style={{ position: 'relative' as const }}>
-                        <select
-                          value={user.role}
-                          disabled={loadingId === user.id}
-                          onChange={e => updateRole(user, e.target.value)}
-                          style={{ width: '100%', padding: '8px 12px', borderRadius: 10, background: `${meta.col}15`, border: `1px solid ${meta.col}40`, color: meta.col, fontSize: 12, fontWeight: 700, fontFamily: 'inherit', cursor: 'pointer', outline: 'none', appearance: 'none' as const }}>
-                          {ROLES.map(r => (
-                            <option key={r} value={r}>{ROLE_META[r].label}</option>
-                          ))}
-                        </select>
-                        {loadingId === user.id && (
-                          <div style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', width: 12, height: 12, border: '2px solid rgba(255,255,255,0.2)', borderTop: `2px solid ${meta.col}`, borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
-                        )}
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
-            </div>
+            ))
           )}
         </div>
-      </div>
-    </div>
+      )}
+
+      {/* ── USERS TAB ── */}
+      {tab === 'users' && (
+        <div>
+          <div style={{ marginBottom:10, fontSize:12, color:'rgba(240,236,228,0.35)' }}>{filteredUsers.length} përdorues</div>
+          <div style={{ display:'grid', gridTemplateColumns:'2fr 90px 100px 80px 100px', gap:12, padding:'8px 16px', fontSize:10, fontWeight:700, color:'rgba(240,236,228,0.25)', textTransform:'uppercase', letterSpacing:'0.07em', borderBottom:'1px solid rgba(240,236,228,0.05)', marginBottom:4 }}>
+            <span>Useri</span><span style={{textAlign:'center'}}>Roli</span><span style={{textAlign:'center'}}>Plani</span><span style={{textAlign:'center'}}>Datë</span><span style={{textAlign:'center'}}>Ndrysho rol</span>
+          </div>
+          {filteredUsers.length===0 ? <EmptyState icon="👥" title="Nuk u gjet" message="Provo kërkim tjetër." size="sm"/> : (
+            filteredUsers.map((u,i) => {
+              const rm = ROLE_META[u.role] || ROLE_META.client
+              return (
+                <div key={u.id} className="admin-row" style={{ display:'grid', gridTemplateColumns:'2fr 90px 100px 80px 100px', gap:12, padding:'12px 16px', borderBottom:'1px solid rgba(240,236,228,0.04)', alignItems:'center', animation:`fadeUp 0.3s ease ${i*0.04}s both` }}>
+                  <div style={{ display:'flex', gap:10, alignItems:'center' }}>
+                    <Avatar name={u.full_name||'U'} size={34} borderRadius={10}/>
+                    <div>
+                      <div style={{ fontSize:13, fontWeight:600 }}>{u.full_name||'Pa emër'}</div>
+                      <div style={{ fontSize:11, color:'rgba(240,236,228,0.35)' }}>📍 {u.city||'—'}</div>
+                    </div>
+                  </div>
+                  <div style={{ textAlign:'center' }}>
+                    <span style={{ fontSize:10, fontWeight:800, color:rm.col, background:`${rm.col}12`, border:`1px solid ${rm.col}25`, borderRadius:6, padding:'2px 8px' }}>{rm.icon} {rm.label}</span>
+                  </div>
+                  <div style={{ textAlign:'center' }}>
+                    <span style={{ fontSize:10, fontWeight:700, color:u.package_type==='premium'?'#a78bfa':'rgba(240,236,228,0.35)', background:u.package_type==='premium'?'rgba(167,139,250,0.08)':'transparent', borderRadius:6, padding:'2px 8px' }}>
+                      {u.package_type==='premium'?'💎 Premium':'⚪ Falas'}
+                    </span>
+                  </div>
+                  <div style={{ textAlign:'center', fontSize:11, color:'rgba(240,236,228,0.35)' }}>{timeAgo(u.created_at)}</div>
+                  <div style={{ textAlign:'center' }}>
+                    <select defaultValue={u.role} onChange={e => updateRole(u.id, e.target.value)}
+                      style={{ padding:'5px 8px', background:'rgba(240,236,228,0.05)', border:'1px solid rgba(240,236,228,0.1)', borderRadius:8, fontSize:11, color:'rgba(240,236,228,0.65)', fontFamily:'inherit', outline:'none', cursor:'pointer' }}>
+                      {['client','company','worker','admin'].map(r => <option key={r} value={r}>{r}</option>)}
+                    </select>
+                  </div>
+                </div>
+              )
+            })
+          )}
+        </div>
+      )}
+
+      {/* ── APPS TAB ── */}
+      {tab === 'apps' && (
+        <div>
+          <div style={{ marginBottom:10, fontSize:12, color:'rgba(240,236,228,0.35)' }}>{recentApplications.length} aplikime të fundit</div>
+          <div style={{ display:'grid', gridTemplateColumns:'2fr 100px 70px 90px 80px', gap:12, padding:'8px 16px', fontSize:10, fontWeight:700, color:'rgba(240,236,228,0.25)', textTransform:'uppercase', letterSpacing:'0.07em', borderBottom:'1px solid rgba(240,236,228,0.05)', marginBottom:4 }}>
+            <span>Projekti</span><span>Klienti</span><span style={{textAlign:'center'}}>Oferta</span><span style={{textAlign:'center'}}>Statusi</span><span style={{textAlign:'right'}}>Data</span>
+          </div>
+          {recentApplications.filter(a=>(a.title+'').toLowerCase().includes(search.toLowerCase())).map((a,i) => (
+            <div key={a.id} className="admin-row" style={{ display:'grid', gridTemplateColumns:'2fr 100px 70px 90px 80px', gap:12, padding:'12px 16px', borderBottom:'1px solid rgba(240,236,228,0.04)', alignItems:'center', animation:`fadeUp 0.3s ease ${i*0.04}s both` }}>
+              <div>
+                <div style={{ fontSize:13, fontWeight:600, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{a.title}</div>
+                <div style={{ fontSize:11, color:'rgba(240,236,228,0.35)' }}>📍 {a.city}</div>
+              </div>
+              <div style={{ fontSize:12, color:'rgba(240,236,228,0.5)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{(a.profiles as any)?.full_name||'—'}</div>
+              <div style={{ textAlign:'center', fontFamily:"'Fraunces',serif", fontWeight:900, color:'#e8621a' }}>{a.offer_count}</div>
+              <div style={{ textAlign:'center' }}><StatusBadge status={a.status} size="xs"/></div>
+              <div style={{ textAlign:'right', fontSize:11, color:'rgba(240,236,228,0.35)' }}>{timeAgo(a.created_at)}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </PageShell>
   )
 }

@@ -31,6 +31,7 @@ const NAV: Record<Role, { icon: string; label: string; href: string; exact?: boo
     { icon: '💼', label: 'Ofertat e mia',      href: '/company/offers'       },
     { icon: '💬', label: 'Mesazhet',           href: '/company/messages'     },
     { icon: '📊', label: 'Statistikat',        href: '/company/stats'        },
+    { icon: '⭐', label: 'Vlerësimet',         href: '/company/reviews'      },
     { icon: '🏢', label: 'Profili i biznesit', href: '/company/profile'      },
   ],
   worker: [
@@ -38,6 +39,7 @@ const NAV: Record<Role, { icon: string; label: string; href: string; exact?: boo
     { icon: '📋', label: 'Aplikimet',          href: '/worker/applications'  },
     { icon: '💼', label: 'Ofertat e mia',      href: '/worker/offers'        },
     { icon: '💬', label: 'Mesazhet',           href: '/worker/messages'      },
+    { icon: '📊', label: 'Statistikat',        href: '/worker/stats'         },
     { icon: '⭐', label: 'Vlerësimet',         href: '/worker/reviews'       },
     { icon: '👤', label: 'Profili im',         href: '/worker/profile'       },
   ],

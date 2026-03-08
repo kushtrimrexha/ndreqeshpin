@@ -1,18 +1,20 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useRef } from 'react'
+import { createBrowserClient } from '@supabase/ssr'
 import ProfileShell from '@/components/ProfileShell'
 import FormField    from '@/components/FormField'
 import { useToast } from '@/components/Toast'
-import Link         from 'next/link'
 
 interface Profile { id:string; full_name:string; city:string; phone?:string; bio?:string; avatar_url?:string; package_type:string; created_at:string }
-interface Stats   { applications:number; accepted:number }
+interface Stats   { totalApplications:number; acceptedApplications:number; totalOffers:number }
 
 const CITIES = ['Prishtinë','Prizren','Pejë','Gjakovë','Mitrovicë','Gjilan','Ferizaj','Vushtrri','Skenderaj','Lipjan','Podujevë','Klinë']
 
 export default function ClientProfileClient({ profile, stats }: { profile:Profile; stats:Stats }) {
-  const toast = useToast()
+  const supabase = createBrowserClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!)
+  const toast    = useToast()
+  const fileRef  = useRef<HTMLInputElement>(null)
 
   const [form, setForm] = useState({
     full_name: profile.full_name || '',
@@ -21,130 +23,150 @@ export default function ClientProfileClient({ profile, stats }: { profile:Profil
     bio:       profile.bio       || '',
   })
   const [avatar,  setAvatar]  = useState(profile.avatar_url || '')
-  const [saving,  setSaving]  = useState(false)
   const [focused, setFocused] = useState<string|null>(null)
+  const [saving,  setSaving]  = useState(false)
+  const [dirty,   setDirty]   = useState(false)
 
-  const set = (k: string) => (v: string) => setForm(f => ({ ...f, [k]: v }))
-
-  const isDirty =
-    form.full_name !== profile.full_name ||
-    form.city      !== profile.city      ||
-    form.phone     !== (profile.phone||'') ||
-    form.bio       !== (profile.bio||'')
-
-  async function handleSave() {
-    if (!form.full_name.trim()) { toast.error('Gabim','Emri është i detyrueshëm.'); return }
-    if (!form.city.trim())      { toast.error('Gabim','Qyteti është i detyrueshëm.'); return }
-    setSaving(true)
-    try {
-      const res  = await fetch('/api/profile/update', {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify(form),
-      })
-      const data = await res.json()
-      if (!res.ok) { toast.error('Gabim',data.error||'Provo sërish.'); return }
-      toast.success('✓ Profili u ruajt!','Ndryshimet u ruajtën me sukses.')
-    } catch { toast.error('Gabim','Problem me lidhjen.') }
-    finally { setSaving(false) }
+  function set<K extends keyof typeof form>(key: K) {
+    return (val: typeof form[K]) => { setForm(p=>({...p,[key]:val})); setDirty(true) }
   }
 
-  const isPremium = profile.package_type !== 'free'
+  const completion = [
+    { done:!!form.full_name,           label:'Emri i plotë' },
+    { done:!!form.city,                label:'Qyteti' },
+    { done:!!form.phone,               label:'Telefoni' },
+    { done:!!form.bio&&form.bio.length>20, label:'Prezantimi' },
+    { done:!!avatar,                   label:'Foto profili' },
+  ]
+  const completionPct = Math.round((completion.filter(c=>c.done).length / completion.length) * 100)
+  const memberSince   = new Date(profile.created_at).toLocaleDateString('sq-AL', { month:'long', year:'numeric' })
+
+  async function handleAvatarUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    if (file.size > 3_000_000) { toast.error('Skedari shumë i madh', 'Max 3MB'); return }
+    try {
+      const ext  = file.name.split('.').pop()
+      const path = `avatars/${profile.id}.${ext}`
+      await supabase.storage.from('avatars').upload(path, file, { upsert: true })
+      const { data } = supabase.storage.from('avatars').getPublicUrl(path)
+      await supabase.from('profiles').update({ avatar_url: data.publicUrl }).eq('id', profile.id)
+      setAvatar(data.publicUrl + '?t=' + Date.now())
+      toast.success('Foto u ndryshua! 📸')
+    } catch { toast.error('Gabim', 'Provo sërish.') }
+  }
+
+  async function handleSave() {
+    if (!form.full_name.trim()) { toast.error('Emri është i detyrueshëm'); return }
+    setSaving(true)
+    try {
+      const { error } = await supabase.from('profiles').update({ full_name:form.full_name.trim(), city:form.city, phone:form.phone||null, bio:form.bio||null }).eq('id', profile.id)
+      if (error) throw error
+      toast.success('Profili u ruajt! ✓')
+      setDirty(false)
+    } catch { toast.error('Gabim', 'Provo sërish.') }
+    finally   { setSaving(false) }
+  }
 
   return (
     <div>
-      <style>{`@keyframes fadeUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}@keyframes spin{to{transform:rotate(360deg)}}@keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.5;transform:scale(.85)}}`}</style>
-
-      <div style={{ marginBottom:28, animation:'fadeUp 0.5s ease' }}>
-        <p style={{ fontSize:11,fontWeight:700,color:'rgba(240,236,228,0.3)',textTransform:'uppercase',letterSpacing:'0.12em',marginBottom:8 }}>Llogaria</p>
-        <h1 style={{ fontFamily:"'Fraunces',serif",fontSize:'clamp(1.4rem,3vw,1.9rem)',fontWeight:900,letterSpacing:'-0.03em',marginBottom:6 }}>Profili im</h1>
-        <p style={{ fontSize:14,color:'rgba(240,236,228,0.45)' }}>Menaxho informacionin tënd personal</p>
-      </div>
-
-      {/* Premium banner */}
-      {!isPremium&&(
-        <div style={{ marginBottom:20,padding:'14px 20px',background:'rgba(232,98,26,0.06)',border:'1px solid rgba(232,98,26,0.15)',borderRadius:16,display:'flex',alignItems:'center',justifyContent:'space-between',gap:16,animation:'fadeUp 0.5s ease 0.1s both' }}>
-          <div style={{ display:'flex',alignItems:'center',gap:12 }}>
-            <span style={{ fontSize:24 }}>💎</span>
-            <div>
-              <div style={{ fontSize:13,fontWeight:700,color:'#e8621a',marginBottom:2 }}>Upgrade në Premium</div>
-              <div style={{ fontSize:12,color:'rgba(240,236,228,0.4)' }}>Aplikimet të pakufizuara + prioritet + analytics</div>
-            </div>
-          </div>
-          <Link href="/pricing" style={{ padding:'8px 18px',borderRadius:10,background:'linear-gradient(135deg,#e8621a,#ff7c35)',color:'#fff',textDecoration:'none',fontSize:12,fontWeight:700,whiteSpace:'nowrap',boxShadow:'0 4px 12px rgba(232,98,26,0.3)' }}>
-            Shiko planin →
-          </Link>
-        </div>
-      )}
+      <style>{`
+        @keyframes fadeUp { from{opacity:0;transform:translateY(10px)} to{opacity:1;transform:translateY(0)} }
+        @keyframes spin   { to{transform:rotate(360deg)} }
+      `}</style>
 
       <ProfileShell
-        userId={profile.id} fullName={form.full_name||profile.full_name}
-        city={form.city||profile.city} role="client"
-        avatarUrl={avatar} joinedAt={profile.created_at}
-        onAvatarUpdate={setAvatar}
-        badge={isPremium ? { label:'💎 Premium', col:'#fbbf24' } : null}
+        name={form.full_name || profile.full_name}
+        subtitle={`Klient · anëtar që ${memberSince}`}
+        city={form.city}
+        avatar={avatar}
+        onAvatarClick={() => fileRef.current?.click()}
+        badge={profile.package_type==='premium' ? { label:'💎 Premium', color:'#a78bfa' } : { label:'Plan Falas', color:'rgba(240,236,228,0.4)' }}
         stats={[
-          { label:'Aplikime',      val:stats.applications, icon:'📋', col:'#e8621a' },
-          { label:'Të pranuara',   val:stats.accepted,     icon:'✅', col:'#22d3a5' },
-          { label:'Paketa',        val:isPremium?'Premium':'Falas', icon:'💎', col:isPremium?'#fbbf24':'rgba(240,236,228,0.3)' },
-        ]}>
+          { label:'Aplikimet',  value:stats.totalApplications },
+          { label:'Pranuar',    value:stats.acceptedApplications },
+          { label:'Ofertat',    value:stats.totalOffers },
+        ]}
+      />
 
-        <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
+      <input ref={fileRef} type="file" accept="image/*" onChange={handleAvatarUpload} style={{ display:'none' }}/>
 
-          {/* Personal info */}
-          <div style={{ background:'rgba(240,236,228,0.02)',border:'1px solid rgba(240,236,228,0.07)',borderRadius:18,padding:24 }}>
-            <h2 style={{ fontFamily:"'Fraunces',serif",fontWeight:800,fontSize:'1.05rem',marginBottom:20,display:'flex',alignItems:'center',gap:10 }}>
-              <span style={{ width:32,height:32,borderRadius:9,background:'rgba(96,165,250,0.1)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:16 }}>👤</span>
-              Informacioni personal
-            </h2>
-            <div style={{ display:'grid',gridTemplateColumns:'1fr 1fr',gap:14 }}>
-              <FormField label="Emri i plotë" name="full_name" value={form.full_name} onChange={set('full_name')} required placeholder="p.sh. Artan Krasniqi" focused={focused} onFocus={setFocused} onBlur={()=>setFocused(null)} />
-              <div>
-                <label style={{ fontSize:12,fontWeight:600,color:'rgba(240,236,228,0.5)',display:'block',marginBottom:6 }}>Qyteti</label>
-                <select value={form.city} onChange={e=>set('city')(e.target.value)}
-                  style={{ width:'100%',padding:'12px 14px',background:'rgba(240,236,228,0.04)',border:'1px solid rgba(240,236,228,0.09)',borderRadius:12,color:'#f0ece4',fontFamily:'inherit',fontSize:14,outline:'none',cursor:'pointer' }}>
-                  <option value="">Zgjedh qytetin</option>
-                  {CITIES.map(c=><option key={c} value={c}>{c}</option>)}
-                </select>
-              </div>
-              <FormField label="Numri i telefonit" name="phone" value={form.phone} onChange={set('phone')} type="tel" placeholder="+383 44 123 456" hint="Vetëm për kompanitë e pranuara" focused={focused} onFocus={setFocused} onBlur={()=>setFocused(null)} />
+      {/* Completion bar */}
+      <div style={{ marginBottom:24, padding:'16px 20px', background:'rgba(240,236,228,0.02)', border:`1px solid ${completionPct===100?'rgba(34,211,165,0.2)':'rgba(240,236,228,0.08)'}`, borderRadius:16, animation:'fadeUp 0.4s ease 0.05s both' }}>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10 }}>
+          <span style={{ fontSize:13, fontWeight:700 }}>Plotësia e profilit <span style={{ color:completionPct===100?'#22d3a5':completionPct>60?'#fbbf24':'#f87171' }}>{completionPct}%</span></span>
+          {completionPct<100 && <span style={{ fontSize:11, color:'rgba(240,236,228,0.4)' }}>Profili i plotë rrit besimin tek profesionistët</span>}
+        </div>
+        <div style={{ height:5, background:'rgba(240,236,228,0.08)', borderRadius:10, overflow:'hidden', marginBottom:10 }}>
+          <div style={{ height:'100%', width:`${completionPct}%`, background:completionPct===100?'linear-gradient(90deg,#22d3a5,#10b981)':completionPct>60?'linear-gradient(90deg,#fbbf24,#f59e0b)':'linear-gradient(90deg,#f87171,#ef4444)', borderRadius:10, transition:'width 1s ease' }}/>
+        </div>
+        <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
+          {completion.map((item,i) => (
+            <span key={i} style={{ fontSize:10, fontWeight:700, color:item.done?'#22d3a5':'rgba(240,236,228,0.35)', background:item.done?'rgba(34,211,165,0.06)':'rgba(240,236,228,0.03)', border:`1px solid ${item.done?'rgba(34,211,165,0.15)':'rgba(240,236,228,0.08)'}`, borderRadius:6, padding:'3px 9px' }}>
+              {item.done?'✓ ':''}{item.label}
+            </span>
+          ))}
+        </div>
+      </div>
+
+      {/* Form */}
+      <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
+
+        <div style={{ background:'rgba(240,236,228,0.02)', border:'1px solid rgba(240,236,228,0.07)', borderRadius:16, padding:'20px 22px', animation:'fadeUp 0.4s ease 0.1s both' }}>
+          <h2 style={{ fontFamily:"'Fraunces',serif", fontWeight:800, fontSize:'1rem', marginBottom:18, display:'flex', alignItems:'center', gap:10 }}>
+            <span style={{ width:30, height:30, borderRadius:9, background:'rgba(59,130,246,0.1)', display:'flex', alignItems:'center', justifyContent:'center', fontSize:15 }}>👤</span>
+            Informacioni personal
+          </h2>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:14 }}>
+            <FormField label="Emri i plotë" name="full_name" value={form.full_name} onChange={set('full_name') as any} required focused={focused} onFocus={setFocused} onBlur={()=>setFocused(null)} />
+            <div>
+              <label style={{ fontSize:12, fontWeight:600, color:'rgba(240,236,228,0.5)', display:'block', marginBottom:6 }}>Qyteti</label>
+              <select value={form.city} onChange={e => { set('city')(e.target.value); setDirty(true) }}
+                style={{ width:'100%', padding:'12px 14px', background:'rgba(240,236,228,0.04)', border:'1px solid rgba(240,236,228,0.09)', borderRadius:12, color:'#f0ece4', fontFamily:'inherit', fontSize:14, outline:'none', cursor:'pointer' }}>
+                <option value="">Zgjedh qytetin</option>
+                {CITIES.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
             </div>
-          </div>
-
-          {/* Bio */}
-          <div style={{ background:'rgba(240,236,228,0.02)',border:'1px solid rgba(240,236,228,0.07)',borderRadius:18,padding:24 }}>
-            <h2 style={{ fontFamily:"'Fraunces',serif",fontWeight:800,fontSize:'1.05rem',marginBottom:20,display:'flex',alignItems:'center',gap:10 }}>
-              <span style={{ width:32,height:32,borderRadius:9,background:'rgba(96,165,250,0.1)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:16 }}>✍️</span>
-              Rreth meje
-            </h2>
-            <FormField label="Bio" name="bio" value={form.bio} onChange={set('bio')} type="textarea" rows={4} placeholder="Shkruaj diçka rreth preferencave dhe stilit të jetesës — kjo ndihmon profesionistët të kuptojnë nevojat tuaja." hint={`${form.bio.length}/500 karaktere`} focused={focused} onFocus={setFocused} onBlur={()=>setFocused(null)} />
-          </div>
-
-          {/* Security */}
-          <div style={{ background:'rgba(240,236,228,0.02)',border:'1px solid rgba(240,236,228,0.07)',borderRadius:18,padding:24 }}>
-            <h2 style={{ fontFamily:"'Fraunces',serif",fontWeight:800,fontSize:'1.05rem',marginBottom:16,display:'flex',alignItems:'center',gap:10 }}>
-              <span style={{ width:32,height:32,borderRadius:9,background:'rgba(96,165,250,0.1)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:16 }}>🔒</span>
-              Siguria
-            </h2>
-            <div style={{ padding:'14px 18px',background:'rgba(240,236,228,0.03)',border:'1px solid rgba(240,236,228,0.07)',borderRadius:12,display:'flex',alignItems:'center',justifyContent:'space-between',gap:12 }}>
-              <div>
-                <div style={{ fontWeight:600,fontSize:14,marginBottom:3 }}>Fjalëkalimi</div>
-                <div style={{ fontSize:12,color:'rgba(240,236,228,0.4)' }}>Ndrysho fjalëkalimin e llogarisë tënde</div>
-              </div>
-              <Link href="/forgot-password" style={{ padding:'8px 16px',borderRadius:9,background:'rgba(240,236,228,0.06)',border:'1px solid rgba(240,236,228,0.1)',color:'rgba(240,236,228,0.7)',textDecoration:'none',fontSize:13,fontWeight:600,whiteSpace:'nowrap' }}>
-                Ndrysho →
-              </Link>
+            <div style={{ gridColumn:'1/-1' }}>
+              <FormField label="Telefoni (opsional)" name="phone" type="tel" value={form.phone||''} onChange={set('phone') as any} placeholder="+383 44 123 456" focused={focused} onFocus={setFocused} onBlur={()=>setFocused(null)} />
             </div>
-          </div>
-
-          {/* Save */}
-          <div style={{ display:'flex',justifyContent:'flex-end',alignItems:'center',gap:10 }}>
-            <button onClick={handleSave} disabled={saving||!isDirty}
-              style={{ padding:'12px 28px',borderRadius:12,background:isDirty&&!saving?'linear-gradient(135deg,#e8621a,#ff7c35)':'rgba(240,236,228,0.07)',border:'none',color:isDirty&&!saving?'#fff':'rgba(240,236,228,0.35)',fontFamily:"'Fraunces',serif",fontWeight:800,fontSize:'0.95rem',cursor:isDirty&&!saving?'pointer':'not-allowed',transition:'all 0.2s',display:'flex',alignItems:'center',gap:8,boxShadow:isDirty&&!saving?'0 4px 16px rgba(232,98,26,0.25)':'none' }}>
-              {saving?(<><div style={{ width:14,height:14,border:'2px solid rgba(255,255,255,0.3)',borderTop:'2px solid #fff',borderRadius:'50%',animation:'spin 0.8s linear infinite' }}/>Duke ruajtur...</>):'Ruaj ndryshimet →'}
-            </button>
           </div>
         </div>
-      </ProfileShell>
+
+        <div style={{ background:'rgba(240,236,228,0.02)', border:'1px solid rgba(240,236,228,0.07)', borderRadius:16, padding:'20px 22px', animation:'fadeUp 0.4s ease 0.15s both' }}>
+          <h2 style={{ fontFamily:"'Fraunces',serif", fontWeight:800, fontSize:'1rem', marginBottom:18, display:'flex', alignItems:'center', gap:10 }}>
+            <span style={{ width:30, height:30, borderRadius:9, background:'rgba(96,165,250,0.1)', display:'flex', alignItems:'center', justifyContent:'center', fontSize:15 }}>📝</span>
+            Prezantimi (opsional)
+          </h2>
+          <FormField label="Disa fjalë për veten" name="bio" value={form.bio||''} onChange={set('bio') as any} type="textarea" rows={4} placeholder="Përshkruajeni shkurt kush jeni dhe çfarë lloj projektesh jeni duke kërkuar..." hint={`${(form.bio||'').length}/400 karaktere`} focused={focused} onFocus={setFocused} onBlur={()=>setFocused(null)} />
+        </div>
+
+        {/* Account info card */}
+        <div style={{ background:'rgba(240,236,228,0.02)', border:'1px solid rgba(240,236,228,0.07)', borderRadius:16, padding:'18px 22px', display:'flex', justifyContent:'space-between', alignItems:'center', flexWrap:'wrap', gap:14, animation:'fadeUp 0.4s ease 0.2s both' }}>
+          <div>
+            <div style={{ fontSize:12, fontWeight:700, color:'rgba(240,236,228,0.4)', marginBottom:4 }}>Anëtarë që</div>
+            <div style={{ fontSize:14, fontWeight:700 }}>{memberSince}</div>
+          </div>
+          <div>
+            <div style={{ fontSize:12, fontWeight:700, color:'rgba(240,236,228,0.4)', marginBottom:4 }}>Paketa</div>
+            <span style={{ fontSize:13, fontWeight:700, color:profile.package_type==='premium'?'#a78bfa':'rgba(240,236,228,0.5)', background:profile.package_type==='premium'?'rgba(167,139,250,0.1)':'transparent', padding:profile.package_type==='premium'?'3px 10px':0, borderRadius:7 }}>
+              {profile.package_type==='premium'?'💎 Premium':'Plan Falas'}
+            </span>
+          </div>
+          <a href="/pricing" style={{ fontSize:12, color:'#e8621a', fontWeight:700, textDecoration:'none', padding:'8px 16px', border:'1px solid rgba(232,98,26,0.3)', borderRadius:9, background:'rgba(232,98,26,0.06)', transition:'all 0.2s' }}>
+            {profile.package_type==='premium'?'Menaxho paketën':'🚀 Kalo Premium →'}
+          </a>
+        </div>
+      </div>
+
+      {/* Save */}
+      <div style={{ display:'flex', justifyContent:'flex-end', gap:12, alignItems:'center', marginTop:20, paddingTop:20, borderTop:'1px solid rgba(240,236,228,0.06)' }}>
+        {dirty && <span style={{ fontSize:12, color:'rgba(240,236,228,0.35)' }}>● Ka ndryshime të paruajtura</span>}
+        <button onClick={handleSave} disabled={saving||!dirty}
+          style={{ padding:'12px 28px', borderRadius:13, background:dirty&&!saving?'linear-gradient(135deg,#e8621a,#ff7c35)':'rgba(240,236,228,0.07)', border:'none', color:dirty&&!saving?'#fff':'rgba(240,236,228,0.3)', fontFamily:"'Fraunces',serif", fontWeight:800, fontSize:'0.95rem', cursor:dirty&&!saving?'pointer':'not-allowed', transition:'all 0.2s', display:'flex', alignItems:'center', gap:8, boxShadow:dirty&&!saving?'0 4px 16px rgba(232,98,26,0.25)':'none' }}>
+          {saving ? (<><div style={{ width:14, height:14, border:'2px solid rgba(255,255,255,0.3)', borderTop:'2px solid #fff', borderRadius:'50%', animation:'spin 0.8s linear infinite' }}/>Duke ruajtur...</>) : 'Ruaj ndryshimet →'}
+        </button>
+      </div>
     </div>
   )
 }

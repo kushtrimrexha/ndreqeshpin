@@ -1,348 +1,263 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { createClient }         from '@/lib/supabase/client'
-import Sidebar                  from '@/components/Sidebar'
+import Link                    from 'next/link'
+import PageShell               from '@/components/PageShell'
+import StatusBadge             from '@/components/StatusBadge'
+import EmptyState              from '@/components/EmptyState'
+import { useToast }            from '@/components/Toast'
+import OfferModal              from '@/components/OfferModal'
+import { KpiCard, ActivityFeed } from '@/components/Analytics'
 
-interface Profile { id: string; full_name: string; city: string; package_type: string }
-interface Company { id: string; business_name: string; is_verified: boolean; rating_avg: number; package_type: string }
-interface Application {
-  id: string; title: string; description: string; city: string
-  area_sqm: number | null; budget_min: number | null; budget_max: number | null
-  offer_count: number; expires_at: string; created_at: string
-  categories?: { name: string; icon: string }
-  profiles?:   { full_name: string; city: string }
-}
-interface MyOffer {
-  id: string; price: number; duration_days: number
-  description: string; status: string; created_at: string
-  applications: { title: string; profiles: { full_name: string } }
-}
-interface Stats { total: number; accepted: number; pending: number; revenue: number }
+interface Profile { id:string; full_name:string; city:string; package_type:string; avatar_url?:string }
+interface Company { id:string; business_name:string; is_verified:boolean; rating_avg:number }
+interface Application { id:string; title:string; city:string; status:string; offer_count:number; budget_min?:number; budget_max?:number; expires_at:string; created_at:string; categories?:{name:string;icon:string} }
+interface Stats { totalOffers:number; acceptedOffers:number; pendingOffers:number; totalApplications:number; activeApplications:number; totalEarned:number; rating:number; totalReviews:number; successRate:number }
+interface Review { id:string; rating:number; comment?:string; created_at:string; profiles?:{full_name:string;avatar_url?:string}|any }
 
-// ─── COUNTDOWN ────────────────────────────────────────────────────────────
-function Countdown({ expiresAt }: { expiresAt: string }) {
+interface Props {
+  profile:            Profile
+  company:            Company
+  stats:              Stats
+  recentOffers:       any[]
+  recentApplications: Application[]
+  reviews:            Review[]
+}
+
+function Countdown({ expiresAt }: { expiresAt:string }) {
   const calc = () => {
-    const diff = new Date(expiresAt).getTime() - Date.now()
-    if (diff <= 0) return { label: 'Skaduar', expired: true, urgent: false }
-    const h = Math.floor(diff / 3_600_000)
-    const m = Math.floor((diff % 3_600_000) / 60_000)
-    const s = Math.floor((diff % 60_000) / 1_000)
-    return { label: `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`, expired: false, urgent: diff < 3 * 3_600_000 }
+    const d = new Date(expiresAt).getTime() - Date.now()
+    if (d <= 0) return { label:'Skaduar', col:'#64748b', expired:true }
+    const h = Math.floor(d/3600000), m = Math.floor((d%3600000)/60000), s = Math.floor((d%60000)/1000)
+    const urgent = d < 3*3600000
+    return { label:`${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`, col:urgent?'#ef4444':'#22d3a5', expired:false }
   }
   const [t, setT] = useState(calc)
-  useEffect(() => { const i = setInterval(() => setT(calc()), 1000); return () => clearInterval(i) }, [expiresAt])
-  const color = t.expired ? '#6b7280' : t.urgent ? '#ef4444' : '#10b981'
+  useEffect(() => { const i=setInterval(()=>setT(calc()),1000); return()=>clearInterval(i) }, [expiresAt])
+  return <span style={{ fontFamily:'monospace', fontSize:11, fontWeight:700, color:t.col, background:`${t.col}12`, border:`1px solid ${t.col}25`, borderRadius:7, padding:'2px 8px' }}>⏱ {t.label}</span>
+}
+
+function Stars({ r }: { r:number }) {
   return (
-    <span style={{ fontFamily: "'Fira Code',monospace", fontSize: 11, fontWeight: 700, color, background: `${color}12`, border: `1px solid ${color}30`, borderRadius: 100, padding: '3px 9px', whiteSpace: 'nowrap' as const }}>
-      ⏱ {t.label}
+    <span>
+      {[1,2,3,4,5].map(s => <span key={s} style={{ color:s<=Math.round(r)?'#fbbf24':'rgba(255,255,255,0.1)', fontSize:12 }}>★</span>)}
+      <span style={{ fontSize:11, color:'rgba(240,236,228,0.4)', marginLeft:4 }}>{r>0?r.toFixed(1):'-'}</span>
     </span>
   )
 }
 
-// ─── OFFER MODAL ──────────────────────────────────────────────────────────
-function OfferModal({ app, companyId, onClose, onSuccess }: { app: Application; companyId: string; onClose: () => void; onSuccess: () => void }) {
-  const supabase = createClient()
-  const [price,    setPrice]    = useState('')
-  const [duration, setDuration] = useState('')
-  const [desc,     setDesc]     = useState('')
-  const [loading,  setLoading]  = useState(false)
-  const [error,    setError]    = useState('')
-  const [focused,  setFocused]  = useState<string | null>(null)
+export default function CompanyDashboard({ profile, company, stats, recentOffers, recentApplications, reviews }: Props) {
+  const toast       = useToast()
+  const [offerApp,  setOfferApp]  = useState<Application|null>(null)
+  const [search,    setSearch]    = useState('')
+  const hour = new Date().getHours()
+  const greeting = hour < 12 ? 'Mirëmëngjes' : hour < 17 ? 'Mirëdita' : 'Mirëmbrëma'
 
-  const inp = (n: string): React.CSSProperties => ({
-    width: '100%', background: focused === n ? 'rgba(232,98,26,0.04)' : 'rgba(240,236,228,0.04)',
-    border: `1px solid ${focused === n ? 'rgba(232,98,26,0.5)' : 'rgba(240,236,228,0.1)'}`,
-    borderRadius: 10, padding: '11px 14px', fontSize: 14,
-    color: '#f0ece4', fontFamily: 'inherit', outline: 'none', transition: 'all 0.2s', boxSizing: 'border-box' as const,
-  })
-
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault()
-    if (!price || !duration || !desc) { setError('Të gjitha fushat janë të detyrueshme.'); return }
-    if (Number(price) <= 0)           { setError('Çmimi duhet të jetë pozitiv.'); return }
-    if (desc.length < 30)             { setError('Përshkrimi duhet të ketë min 30 karaktere.'); return }
-    setLoading(true)
-    const { error: err } = await supabase.from('offers').insert({ application_id: app.id, company_id: companyId, provider_type: 'company', price: Number(price), duration_days: Number(duration), description: desc })
-    if (err) { setError(err.message); setLoading(false); return }
-    onSuccess()
-  }
-
-  return (
-    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 20, backdropFilter: 'blur(6px)' }}>
-      <div style={{ width: '100%', maxWidth: 520, background: '#141310', border: '1px solid rgba(240,236,228,0.1)', borderRadius: 22, overflow: 'hidden', animation: 'fadeUp 0.2s ease' }}>
-        <div style={{ padding: '22px 26px', borderBottom: '1px solid rgba(240,236,228,0.07)', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-          <div>
-            <h3 style={{ fontFamily: "'Fraunces',serif", fontSize: '1.2rem', fontWeight: 900, marginBottom: 4 }}>Dërgo Ofertë</h3>
-            <p style={{ fontSize: 13, color: 'rgba(240,236,228,0.45)', lineHeight: 1.5 }}>{app.title}</p>
-          </div>
-          <button onClick={onClose} style={{ width: 32, height: 32, borderRadius: 9, background: 'rgba(240,236,228,0.06)', border: '1px solid rgba(240,236,228,0.1)', color: 'rgba(240,236,228,0.55)', cursor: 'pointer', fontSize: 15, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>✕</button>
-        </div>
-        <div style={{ padding: '12px 26px', background: 'rgba(240,236,228,0.02)', borderBottom: '1px solid rgba(240,236,228,0.06)', display: 'flex', gap: 24 }}>
-          {[{ l: '📍', v: app.city }, { l: '📐', v: app.area_sqm ? `${app.area_sqm} m²` : 'N/A' }, { l: '💰', v: app.budget_max ? `deri €${app.budget_max.toLocaleString()}` : 'Fleksibël' }].map(s => (
-            <div key={s.l}><div style={{ fontSize: 11, color: 'rgba(240,236,228,0.3)', marginBottom: 2 }}>{s.l}</div><div style={{ fontSize: 13, fontWeight: 600 }}>{s.v}</div></div>
-          ))}
-        </div>
-        <form onSubmit={handleSubmit} style={{ padding: '22px 26px' }}>
-          {error && <div style={{ marginBottom: 16, padding: '11px 14px', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)', borderRadius: 10, fontSize: 13, color: '#fca5a5' }}>⚠️ {error}</div>}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
-            <div>
-              <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: 'rgba(240,236,228,0.4)', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 6 }}>Çmimi (€) *</label>
-              <input type="number" placeholder="3200" min="1" value={price} onChange={e => setPrice(e.target.value)} style={inp('price')} onFocus={() => setFocused('price')} onBlur={() => setFocused(null)} />
-            </div>
-            <div>
-              <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: 'rgba(240,236,228,0.4)', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 6 }}>Ditë punë *</label>
-              <input type="number" placeholder="14" min="1" value={duration} onChange={e => setDuration(e.target.value)} style={inp('duration')} onFocus={() => setFocused('duration')} onBlur={() => setFocused(null)} />
-            </div>
-          </div>
-          <div style={{ marginBottom: 20 }}>
-            <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: 'rgba(240,236,228,0.4)', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 6 }}>Përshkrimi i ofertës *</label>
-            <textarea placeholder="Çfarë përfshin oferta juaj, materialet, etapat..." value={desc} onChange={e => setDesc(e.target.value)} rows={4} onFocus={() => setFocused('desc')} onBlur={() => setFocused(null)} style={{ ...inp('desc'), resize: 'vertical' as const, minHeight: 100 }} />
-            <div style={{ fontSize: 11, color: desc.length < 30 ? 'rgba(240,236,228,0.3)' : '#10b981', marginTop: 5, textAlign: 'right' }}>{desc.length}/30 min</div>
-          </div>
-          <div style={{ display: 'flex', gap: 10 }}>
-            <button type="button" onClick={onClose} style={{ flex: 1, padding: '12px', borderRadius: 11, background: 'rgba(240,236,228,0.05)', border: '1px solid rgba(240,236,228,0.1)', color: 'rgba(240,236,228,0.6)', fontFamily: 'inherit', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>Anulo</button>
-            <button type="submit" disabled={loading} style={{ flex: 2, padding: '12px', borderRadius: 11, background: loading ? 'rgba(232,98,26,0.5)' : '#e8621a', border: 'none', color: '#fff', fontFamily: "'Fraunces',serif", fontWeight: 800, fontSize: '0.95rem', cursor: loading ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
-              {loading ? <><div style={{ width: 14, height: 14, border: '2px solid rgba(255,255,255,0.3)', borderTop: '2px solid #fff', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />Duke dërguar...</> : 'Dërgo Ofertën →'}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
+  const filteredApps = recentApplications.filter(a =>
+    a.title.toLowerCase().includes(search.toLowerCase()) ||
+    a.city.toLowerCase().includes(search.toLowerCase())
   )
-}
 
-// ─── MAIN ─────────────────────────────────────────────────────────────────
-export default function CompanyDashboard({ profile, company }: { profile: Profile; company: Company }) {
-  const supabase = createClient()
-  const [tab,           setTab]           = useState<'browse'|'offers'|'stats'>('browse')
-  const [applications,  setApplications]  = useState<Application[]>([])
-  const [myOffers,      setMyOffers]      = useState<MyOffer[]>([])
-  const [stats,         setStats]         = useState<Stats | null>(null)
-  const [loading,       setLoading]       = useState(true)
-  const [offerModal,    setOfferModal]    = useState<Application | null>(null)
-  const [notifications, setNotifications] = useState(0)
-  const [toast,         setToast]         = useState('')
-
-  useEffect(() => {
-    setLoading(true)
-    if (tab === 'browse') {
-      supabase.from('applications').select('*, categories(name,icon), profiles!client_id(full_name,city)').eq('status','active').order('created_at',{ascending:false}).limit(30)
-        .then(({ data }) => { setApplications(data || []); setLoading(false) })
-    }
-    if (tab === 'offers') {
-      supabase.from('offers').select('*, applications(title, profiles!client_id(full_name))').eq('company_id', company.id).order('created_at',{ascending:false})
-        .then(({ data }) => { setMyOffers(data || []); setLoading(false) })
-    }
-    if (tab === 'stats') {
-      supabase.from('offers').select('id,status,price').eq('company_id', company.id)
-        .then(({ data }) => {
-          const all = data || []
-          const acc = all.filter(o => o.status === 'accepted')
-          setStats({ total: all.length, accepted: acc.length, pending: all.filter(o => o.status === 'pending').length, revenue: acc.reduce((s,o) => s + Number(o.price), 0) })
-          setLoading(false)
-        })
-    }
-  }, [tab, company.id])
-
-  useEffect(() => {
-    supabase.from('notifications').select('id',{count:'exact'}).eq('user_id',profile.id).eq('is_read',false).then(({count}) => setNotifications(count || 0))
-  }, [profile.id])
-
-  function handleOfferSuccess() {
-    setOfferModal(null)
-    setToast('Oferta u dërgua me sukses! 🎉')
-    setTimeout(() => setToast(''), 4000)
-  }
-
-  const statusColors: Record<string, string> = { pending: '#f59e0b', accepted: '#10b981', rejected: '#ef4444', withdrawn: '#6b7280' }
-  const statusLabels: Record<string, string> = { pending: 'Në pritje', accepted: 'Pranuar', rejected: 'Refuzuar', withdrawn: 'Tërhequr' }
+  const activity = [
+    ...recentOffers.slice(0,3).map((o:any) => ({
+      id:o.id, icon:o.status==='accepted'?'✅':'💼',
+      title:o.status==='accepted'?'Ofertë e pranuar':'Ofertë e dërguar',
+      description:`${o.applications?.title||'Projekt'} — €${(o.price||0).toLocaleString()}`,
+      time:new Date(o.created_at).toLocaleDateString('sq-AL'), color:o.status==='accepted'?'#22d3a5':'#e8621a',
+    })),
+    ...reviews.slice(0,2).map(r => ({
+      id:r.id, icon:'⭐', title:`Vlerësim ${r.rating}★`,
+      description:(r.profiles as any)?.full_name||'Klient', time:new Date(r.created_at).toLocaleDateString('sq-AL'), color:'#fbbf24',
+    })),
+  ].sort((a,b) => 0)
 
   return (
-    <div style={{ minHeight: '100vh', background: '#0f0e0c', color: '#f0ece4', fontFamily: "'DM Sans','Helvetica Neue',sans-serif", display: 'flex' }}>
+    <PageShell role="company" userName={profile.full_name} userId={profile.id} package={profile.package_type} pageTitle="Dashboard" pageIcon="🏢">
       <style>{`
-        @keyframes fadeUp { from{opacity:0;transform:translateY(14px)} to{opacity:1;transform:translateY(0)} }
-        @keyframes spin   { to{transform:rotate(360deg)} }
-        @keyframes pulse  { 0%,100%{opacity:1} 50%{opacity:0.4} }
-        .app-card:hover  { border-color: rgba(240,236,228,0.15) !important; }
-        .tab-btn:hover   { color: #f0ece4 !important; }
-        .offer-row:hover { background: rgba(240,236,228,0.04) !important; }
+        @keyframes fadeUp { from{opacity:0;transform:translateY(12px)} to{opacity:1;transform:translateY(0)} }
+        @keyframes pulse  { 0%,100%{opacity:1} 50%{opacity:.5} }
+        .app-card:hover   { border-color:rgba(240,236,228,0.14)!important; transform:translateY(-1px); }
+        .app-card         { transition:all 0.2s; }
+        .quick-link:hover { border-color:rgba(240,236,228,0.14)!important; transform:translateY(-2px); box-shadow:0 4px 20px rgba(0,0,0,0.2); }
+        .quick-link       { transition:all 0.2s; }
+        .offer-btn:hover  { opacity:.9!important; transform:translateY(-1px); }
       `}</style>
 
-      <Sidebar role="company" userName={profile.full_name} unread={notifications} package={company.package_type} />
-
-      <div style={{ flex: 1, overflowY: 'auto', minWidth: 0 }}>
-
-        {toast && (
-          <div style={{ position: 'fixed', top: 20, right: 20, zIndex: 500, background: 'rgba(16,185,129,0.12)', border: '1px solid rgba(16,185,129,0.3)', color: '#10b981', padding: '13px 20px', borderRadius: 12, fontSize: 14, fontWeight: 600, boxShadow: '0 8px 24px rgba(0,0,0,0.3)', animation: 'fadeUp 0.3s ease' }}>
-            {toast}
-          </div>
-        )}
-
-        <div style={{ maxWidth: 1200, margin: '0 auto', padding: '36px 28px' }}>
-
-          {/* ── HEADER ──────────────────────── */}
-          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 32, animation: 'fadeUp 0.4s ease' }}>
-            <div>
-              <p style={{ fontSize: 12, fontWeight: 700, color: 'rgba(240,236,228,0.35)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 6 }}>Dashboard</p>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 6 }}>
-                <h1 style={{ fontFamily: "'Fraunces',serif", fontSize: '1.9rem', fontWeight: 900, letterSpacing: '-0.03em' }}>{company.business_name}</h1>
-                {company.is_verified && <span style={{ fontSize: 11, background: 'rgba(16,185,129,0.1)', color: '#10b981', border: '1px solid rgba(16,185,129,0.25)', borderRadius: 100, padding: '4px 12px', fontWeight: 700 }}>✓ Verified</span>}
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ fontSize: 13, color: 'rgba(240,236,228,0.4)' }}>⭐ {company.rating_avg.toFixed(1)}</span>
-                <span style={{ width: 3, height: 3, borderRadius: '50%', background: 'rgba(240,236,228,0.2)', display: 'inline-block' }} />
-                <span style={{ fontSize: 12, fontWeight: 700, color: company.package_type !== 'free' ? '#f59e0b' : 'rgba(240,236,228,0.4)', background: company.package_type !== 'free' ? 'rgba(245,158,11,0.1)' : 'rgba(240,236,228,0.05)', border: `1px solid ${company.package_type !== 'free' ? 'rgba(245,158,11,0.25)' : 'rgba(240,236,228,0.08)'}`, borderRadius: 100, padding: '2px 10px' }}>
-                  {company.package_type !== 'free' ? '💎 Premium' : '🆓 Falas'}
-                </span>
-              </div>
-            </div>
-
-            {/* Tab switcher */}
-            <div style={{ display: 'flex', gap: 3, background: 'rgba(240,236,228,0.04)', padding: 4, borderRadius: 13, border: '1px solid rgba(240,236,228,0.07)' }}>
-              {([['browse','📋 Aplikimet'],['offers','💼 Ofertat e mia'],['stats','📊 Statistikat']] as const).map(([id, label]) => (
-                <button key={id} onClick={() => setTab(id)} style={{ padding: '9px 18px', borderRadius: 10, border: 'none', fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', background: tab === id ? '#e8621a' : 'transparent', color: tab === id ? '#fff' : 'rgba(240,236,228,0.5)', transition: 'all 0.2s' }}>
-                  {label}
-                </button>
-              ))}
+      {/* Greeting */}
+      <div style={{ marginBottom:28, animation:'fadeUp 0.5s ease' }}>
+        <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', flexWrap:'wrap', gap:16 }}>
+          <div>
+            <p style={{ fontSize:11, fontWeight:700, color:'rgba(240,236,228,0.3)', textTransform:'uppercase', letterSpacing:'0.12em', marginBottom:8 }}>
+              {greeting},{' '}
+              <span style={{ color:'#e8621a' }}>{company.business_name || profile.full_name}</span>
+            </p>
+            <h1 style={{ fontFamily:"'Fraunces',serif", fontSize:'clamp(1.6rem,3vw,2.2rem)', fontWeight:900, letterSpacing:'-0.03em', lineHeight:1.1, marginBottom:8 }}>
+              Pasqyra e <span style={{ color:'#e8621a', fontStyle:'italic' }}>biznesit</span>
+            </h1>
+            <div style={{ display:'flex', gap:12, flexWrap:'wrap', alignItems:'center' }}>
+              {company.is_verified ? (
+                <span style={{ fontSize:11, fontWeight:700, color:'#22d3a5', background:'rgba(34,211,165,0.08)', border:'1px solid rgba(34,211,165,0.2)', borderRadius:20, padding:'3px 12px' }}>✓ Kompani e verifikuar</span>
+              ) : (
+                <span style={{ fontSize:11, fontWeight:700, color:'#fbbf24', background:'rgba(251,191,36,0.08)', border:'1px solid rgba(251,191,36,0.2)', borderRadius:20, padding:'3px 12px' }}>⏳ Verifikimi në pritje</span>
+              )}
+              {stats.rating > 0 && <span style={{ fontSize:11, color:'rgba(240,236,228,0.4)' }}>⭐ {stats.rating.toFixed(1)} ({stats.totalReviews} reviews)</span>}
             </div>
           </div>
-
-          {/* Verification warning */}
-          {!company.is_verified && (
-            <div style={{ marginBottom: 28, padding: '16px 20px', background: 'rgba(245,158,11,0.07)', border: '1px solid rgba(245,158,11,0.2)', borderRadius: 14, display: 'flex', alignItems: 'center', gap: 14 }}>
-              <span style={{ fontSize: 24 }}>⏳</span>
-              <div>
-                <div style={{ fontWeight: 700, color: '#f59e0b', marginBottom: 3 }}>Llogaria në pritje verifikimi</div>
-                <p style={{ fontSize: 13, color: 'rgba(240,236,228,0.5)', lineHeight: 1.6 }}>Ekipi ynë po verifikon kompaninë tuaj. Zakonisht zgjat 24–48 orë. Pas verifikimit mund të dërgoni oferta.</p>
-              </div>
-            </div>
-          )}
-
-          {/* ── TAB: BROWSE ─────────────────── */}
-          {tab === 'browse' && (
-            loading ? (
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(340px,1fr))', gap: 14 }}>
-                {[1,2,3,4].map(i => <div key={i} style={{ padding: 22, background: 'rgba(240,236,228,0.03)', border: '1px solid rgba(240,236,228,0.07)', borderRadius: 16 }}><div style={{ height: 15, background: 'rgba(240,236,228,0.06)', borderRadius: 6, marginBottom: 10, width: '70%', animation: 'pulse 1.5s ease infinite' }} /><div style={{ height: 11, background: 'rgba(240,236,228,0.04)', borderRadius: 4, width: '50%', animation: 'pulse 1.5s ease infinite' }} /></div>)}
-              </div>
-            ) : applications.length === 0 ? (
-              <div style={{ textAlign: 'center', padding: '80px 20px', color: 'rgba(240,236,228,0.3)' }}>
-                <div style={{ fontSize: 52, marginBottom: 16 }}>📭</div>
-                <div style={{ fontFamily: "'Fraunces',serif", fontSize: '1.2rem', fontWeight: 800, marginBottom: 8 }}>Nuk ka aplikime aktive</div>
-                <p style={{ fontSize: 14, lineHeight: 1.65 }}>Momentalisht nuk ka projekte aktive. Kthehu më vonë.</p>
-              </div>
-            ) : (
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(340px,1fr))', gap: 14 }}>
-                {applications.map((app, i) => (
-                  <div key={app.id} className="app-card" style={{ padding: '20px', background: 'rgba(240,236,228,0.02)', border: '1px solid rgba(240,236,228,0.08)', borderRadius: 18, display: 'flex', flexDirection: 'column', animation: `fadeUp 0.4s ease ${i * 0.05}s both`, transition: 'border-color 0.2s' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
-                      <div style={{ flex: 1, marginRight: 10 }}>
-                        {app.categories && <div style={{ fontSize: 11, color: 'rgba(240,236,228,0.4)', marginBottom: 4 }}>{app.categories.icon} {app.categories.name}</div>}
-                        <h3 style={{ fontWeight: 700, fontSize: 15, lineHeight: 1.35 }}>{app.title}</h3>
-                      </div>
-                      <Countdown expiresAt={app.expires_at} />
-                    </div>
-                    <p style={{ fontSize: 13, color: 'rgba(240,236,228,0.5)', lineHeight: 1.65, marginBottom: 14, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' as any, overflow: 'hidden' }}>{app.description}</p>
-                    <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' as const, marginBottom: 12 }}>
-                      {[{ i: '📍', v: app.city }, app.area_sqm ? { i: '📐', v: `${app.area_sqm} m²` } : null, app.budget_max ? { i: '💰', v: `deri €${app.budget_max.toLocaleString()}` } : null, { i: '💼', v: `${app.offer_count} oferta` }].filter(Boolean).map((m, j) => (
-                        <span key={j} style={{ fontSize: 12, color: 'rgba(240,236,228,0.45)' }}>{m!.i} {m!.v}</span>
-                      ))}
-                    </div>
-                    {app.profiles && (
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 0', borderTop: '1px solid rgba(240,236,228,0.06)', marginBottom: 14 }}>
-                        <div style={{ width: 26, height: 26, borderRadius: '50%', background: 'linear-gradient(135deg,#3b82f6,#8b5cf6)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, fontWeight: 800, color: '#fff' }}>{app.profiles.full_name.slice(0,2).toUpperCase()}</div>
-                        <span style={{ fontSize: 12, color: 'rgba(240,236,228,0.5)' }}>{app.profiles.full_name}</span>
-                      </div>
-                    )}
-                    <button onClick={() => company.is_verified ? setOfferModal(app) : null} disabled={!company.is_verified}
-                      style={{ width: '100%', padding: '12px', borderRadius: 11, background: company.is_verified ? '#e8621a' : 'rgba(240,236,228,0.06)', border: 'none', color: company.is_verified ? '#fff' : 'rgba(240,236,228,0.3)', fontFamily: "'Fraunces',serif", fontWeight: 800, fontSize: '0.9rem', cursor: company.is_verified ? 'pointer' : 'not-allowed', transition: 'all 0.2s', marginTop: 'auto' }}>
-                      {company.is_verified ? 'Dërgo Ofertë →' : 'Prit verifikimin'}
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )
-          )}
-
-          {/* ── TAB: MY OFFERS ──────────────── */}
-          {tab === 'offers' && (
-            loading ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                {[1,2,3].map(i => <div key={i} style={{ height: 80, background: 'rgba(240,236,228,0.03)', border: '1px solid rgba(240,236,228,0.07)', borderRadius: 14, animation: 'pulse 1.5s ease infinite' }} />)}
-              </div>
-            ) : myOffers.length === 0 ? (
-              <div style={{ textAlign: 'center', padding: '80px 20px', color: 'rgba(240,236,228,0.3)' }}>
-                <div style={{ fontSize: 52, marginBottom: 16 }}>💼</div>
-                <div style={{ fontFamily: "'Fraunces',serif", fontSize: '1.2rem', fontWeight: 800, marginBottom: 8 }}>Nuk ke oferta ende</div>
-                <p style={{ fontSize: 14, lineHeight: 1.65 }}>Shko tek "Aplikimet" dhe dërgo ofertën tënde të parë.</p>
-              </div>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {myOffers.map((o, i) => {
-                  const sc = statusColors[o.status] || '#6b7280'
-                  const sl = statusLabels[o.status] || o.status
-                  return (
-                    <div key={o.id} className="offer-row" style={{ padding: '18px 22px', background: 'rgba(240,236,228,0.02)', border: '1px solid rgba(240,236,228,0.07)', borderRadius: 14, display: 'flex', alignItems: 'center', gap: 16, animation: `fadeUp 0.3s ease ${i * 0.05}s both`, transition: 'background 0.15s' }}>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 4 }}>{o.applications?.title}</div>
-                        <div style={{ fontSize: 13, color: 'rgba(240,236,228,0.45)' }}>👤 {o.applications?.profiles?.full_name} · 📅 {new Date(o.created_at).toLocaleDateString('sq-AL')}</div>
-                      </div>
-                      <div style={{ textAlign: 'right' }}>
-                        <div style={{ fontFamily: "'Fraunces',serif", fontSize: '1.4rem', fontWeight: 900, color: '#e8621a' }}>€{Number(o.price).toLocaleString()}</div>
-                        <div style={{ fontSize: 12, color: 'rgba(240,236,228,0.4)' }}>{o.duration_days} ditë</div>
-                      </div>
-                      <span style={{ fontSize: 11, fontWeight: 700, color: sc, background: `${sc}12`, border: `1px solid ${sc}30`, borderRadius: 100, padding: '4px 12px', whiteSpace: 'nowrap' as const }}>{sl}</span>
-                    </div>
-                  )
-                })}
-              </div>
-            )
-          )}
-
-          {/* ── TAB: STATS ──────────────────── */}
-          {tab === 'stats' && (
-            loading || !stats ? (
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 14 }}>
-                {[1,2,3,4].map(i => <div key={i} style={{ height: 120, background: 'rgba(240,236,228,0.03)', border: '1px solid rgba(240,236,228,0.07)', borderRadius: 16, animation: 'pulse 1.5s ease infinite' }} />)}
-              </div>
-            ) : (
-              <div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 14, marginBottom: 20 }}>
-                  {[
-                    { l: 'Oferta totale',  v: stats.total,                          icon: '📤', c: '#3b82f6' },
-                    { l: 'Të pranuara',    v: stats.accepted,                        icon: '✅', c: '#10b981' },
-                    { l: 'Në pritje',      v: stats.pending,                         icon: '⏳', c: '#f59e0b' },
-                    { l: 'Të ardhura',     v: `€${stats.revenue.toLocaleString()}`,  icon: '💰', c: '#e8621a' },
-                  ].map((s, i) => (
-                    <div key={i} style={{ padding: '22px', background: 'rgba(240,236,228,0.02)', border: '1px solid rgba(240,236,228,0.07)', borderRadius: 18, position: 'relative', overflow: 'hidden', animation: `fadeUp 0.4s ease ${i * 0.07}s both` }}>
-                      <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 3, background: s.c }} />
-                      <div style={{ fontSize: 28, marginBottom: 12 }}>{s.icon}</div>
-                      <div style={{ fontFamily: "'Fraunces',serif", fontSize: '1.9rem', fontWeight: 900, color: s.c, lineHeight: 1, marginBottom: 6 }}>{s.v}</div>
-                      <div style={{ fontSize: 12, color: 'rgba(240,236,228,0.4)' }}>{s.l}</div>
-                    </div>
-                  ))}
-                </div>
-                <div style={{ padding: '24px', background: 'rgba(240,236,228,0.02)', border: '1px solid rgba(240,236,228,0.07)', borderRadius: 18 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
-                    <span style={{ fontWeight: 700 }}>Shkalla e suksesit</span>
-                    <span style={{ fontFamily: "'Fraunces',serif", fontWeight: 900, color: '#10b981', fontSize: '1.3rem' }}>
-                      {stats.total > 0 ? Math.round((stats.accepted / stats.total) * 100) : 0}%
-                    </span>
-                  </div>
-                  <div style={{ height: 8, background: 'rgba(240,236,228,0.07)', borderRadius: 4, overflow: 'hidden' }}>
-                    <div style={{ height: '100%', width: `${stats.total > 0 ? Math.round((stats.accepted / stats.total) * 100) : 0}%`, background: 'linear-gradient(90deg,#10b981,#34d399)', borderRadius: 4, transition: 'width 1s ease' }} />
-                  </div>
-                </div>
-              </div>
-            )
-          )}
-
+          <Link href="/company/applications"
+            style={{ padding:'12px 22px', borderRadius:13, background:'linear-gradient(135deg,#e8621a,#ff7c35)', color:'#fff', fontFamily:"'Fraunces',serif", fontWeight:700, fontSize:'0.9rem', textDecoration:'none', boxShadow:'0 4px 20px rgba(232,98,26,0.3)', transition:'all 0.2s', whiteSpace:'nowrap', display:'inline-flex', alignItems:'center', gap:8 }}>
+            🔍 Gjej projekte →
+          </Link>
         </div>
       </div>
 
-      {offerModal && (
-        <OfferModal app={offerModal} companyId={company.id} onClose={() => setOfferModal(null)} onSuccess={handleOfferSuccess} />
+      {/* KPI row */}
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(155px,1fr))', gap:12, marginBottom:28 }}>
+        {[
+          { icon:'💼', label:'Ofertat dërguar', val:stats.totalOffers,    col:'#e8621a' },
+          { icon:'✅', label:'Të pranuara',      val:stats.acceptedOffers, col:'#22d3a5' },
+          { icon:'⏳', label:'Në pritje',        val:stats.pendingOffers,  col:'#fbbf24' },
+          { icon:'🎯', label:'Sukses',           val:`${stats.successRate}%`,col:'#60a5fa' },
+          { icon:'💰', label:'Të ardhura',       val:`€${stats.totalEarned.toLocaleString()}`,col:'#22d3a5' },
+          { icon:'🔥', label:'Projekte aktive',  val:stats.activeApplications,col:'#f87171' },
+        ].map((kpi,i) => (
+          <div key={i} style={{ padding:'16px 18px', background:'rgba(240,236,228,0.02)', border:'1px solid rgba(240,236,228,0.07)', borderRadius:16, animation:`fadeUp 0.4s ease ${i*0.06}s both` }}>
+            <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:10 }}>
+              <span style={{ fontSize:16 }}>{kpi.icon}</span>
+              <span style={{ fontSize:11, color:'rgba(240,236,228,0.4)', fontWeight:600 }}>{kpi.label}</span>
+            </div>
+            <div style={{ fontFamily:"'Fraunces',serif", fontSize:'1.65rem', fontWeight:900, color:kpi.col, lineHeight:1 }}>{kpi.val}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Main grid */}
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 340px', gap:16, marginBottom:24, alignItems:'start' }}>
+
+        {/* Left: Active Applications */}
+        <div>
+          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:14 }}>
+            <div>
+              <h2 style={{ fontFamily:"'Fraunces',serif", fontWeight:900, fontSize:'1.1rem', marginBottom:3 }}>🔥 Projekte aktive</h2>
+              <p style={{ fontSize:12, color:'rgba(240,236,228,0.4)' }}>{stats.activeApplications} disponueshme</p>
+            </div>
+            <div style={{ display:'flex', gap:8 }}>
+              <div style={{ position:'relative' }}>
+                <span style={{ position:'absolute', left:8, top:'50%', transform:'translateY(-50%)', fontSize:12, opacity:.3 }}>🔍</span>
+                <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Kërko..."
+                  style={{ padding:'7px 10px 7px 26px', background:'rgba(240,236,228,0.04)', border:'1px solid rgba(240,236,228,0.08)', borderRadius:9, fontSize:12, color:'#f0ece4', fontFamily:'inherit', outline:'none', width:150 }}/>
+              </div>
+            </div>
+          </div>
+
+          <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+            {filteredApps.length === 0 ? (
+              <EmptyState icon="📋" title="Nuk ka projekte" message="Nuk ka aplikime aktive për momentin." size="sm"/>
+            ) : filteredApps.map((app,i) => (
+              <div key={app.id} className="app-card"
+                style={{ padding:'16px 18px', background:'rgba(240,236,228,0.02)', border:'1px solid rgba(240,236,228,0.07)', borderRadius:14, animation:`fadeUp 0.3s ease ${i*0.05}s both` }}>
+                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:12, marginBottom:10 }}>
+                  <div style={{ flex:1, minWidth:0 }}>
+                    {app.categories && <span style={{ fontSize:10, color:'rgba(240,236,228,0.35)', display:'block', marginBottom:3 }}>{app.categories.icon} {app.categories.name}</span>}
+                    <div style={{ fontSize:13, fontWeight:700, color:'#f0ece4', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{app.title}</div>
+                  </div>
+                  {(app.budget_max||0)>0 && <div style={{ fontFamily:"'Fraunces',serif", fontSize:'1.05rem', fontWeight:900, color:'#e8621a', flexShrink:0 }}>€{(app.budget_max||0).toLocaleString()}</div>}
+                </div>
+                <div style={{ display:'flex', gap:10, alignItems:'center', justifyContent:'space-between', flexWrap:'wrap' }}>
+                  <div style={{ display:'flex', gap:8, alignItems:'center' }}>
+                    <span style={{ fontSize:11, color:'rgba(240,236,228,0.35)' }}>📍 {app.city}</span>
+                    <span style={{ fontSize:11, color:'rgba(240,236,228,0.3)' }}>💼 {app.offer_count} oferta</span>
+                    <Countdown expiresAt={app.expires_at}/>
+                  </div>
+                  <button className="offer-btn" onClick={() => setOfferApp(app)}
+                    style={{ fontSize:11, fontWeight:800, color:'#fff', background:'linear-gradient(135deg,#e8621a,#ff7c35)', padding:'6px 16px', borderRadius:9, border:'none', cursor:'pointer', fontFamily:'inherit', boxShadow:'0 2px 10px rgba(232,98,26,0.3)', transition:'all 0.2s' }}>
+                    Dërgo ofertë →
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Right panel */}
+        <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
+
+          {/* Activity */}
+          <ActivityFeed items={activity} title="⚡ Aktiviteti i fundit"/>
+
+          {/* Recent reviews */}
+          {reviews.length > 0 && (
+            <div style={{ background:'rgba(240,236,228,0.02)', border:'1px solid rgba(240,236,228,0.07)', borderRadius:16, overflow:'hidden' }}>
+              <div style={{ padding:'13px 16px', borderBottom:'1px solid rgba(240,236,228,0.06)', fontSize:13, fontWeight:700, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+                <span>⭐ Vlerësimet e fundit</span>
+                <Link href="/company/reviews" style={{ fontSize:11, color:'#e8621a', textDecoration:'none', fontWeight:700 }}>Shiko →</Link>
+              </div>
+              {reviews.slice(0,3).map((r,i) => (
+                <div key={r.id} style={{ padding:'12px 16px', borderBottom:i<2?'1px solid rgba(240,236,228,0.04)':'none' }}>
+                  <div style={{ display:'flex', justifyContent:'space-between', marginBottom:4 }}>
+                    <span style={{ fontSize:12, fontWeight:600 }}>{(r.profiles as any)?.full_name||'Klient'}</span>
+                    <Stars r={r.rating}/>
+                  </div>
+                  {r.comment && <p style={{ fontSize:12, color:'rgba(240,236,228,0.4)', lineHeight:1.5, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{r.comment}</p>}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Recent offers */}
+          {recentOffers.length > 0 && (
+            <div style={{ background:'rgba(240,236,228,0.02)', border:'1px solid rgba(240,236,228,0.07)', borderRadius:16, overflow:'hidden' }}>
+              <div style={{ padding:'13px 16px', borderBottom:'1px solid rgba(240,236,228,0.06)', fontSize:13, fontWeight:700, display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+                <span>💼 Ofertat e fundit</span>
+                <Link href="/company/offers" style={{ fontSize:11, color:'#e8621a', textDecoration:'none', fontWeight:700 }}>Shiko →</Link>
+              </div>
+              {recentOffers.slice(0,4).map((o:any,i:number) => (
+                <div key={o.id} style={{ padding:'11px 16px', borderBottom:i<3?'1px solid rgba(240,236,228,0.04)':'none', display:'flex', justifyContent:'space-between', alignItems:'center', gap:10 }}>
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <div style={{ fontSize:12, fontWeight:600, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{o.applications?.title||'—'}</div>
+                    <div style={{ fontSize:11, color:'rgba(240,236,228,0.35)' }}>{o.duration_days}d punë</div>
+                  </div>
+                  <div style={{ textAlign:'right' }}>
+                    <div style={{ fontFamily:"'Fraunces',serif", fontWeight:900, color:'#e8621a', fontSize:'0.95rem' }}>€{(o.price||0).toLocaleString()}</div>
+                    <StatusBadge status={o.status} size="xs"/>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Quick links */}
+      <div>
+        <p style={{ fontSize:11, fontWeight:700, color:'rgba(240,236,228,0.3)', textTransform:'uppercase', letterSpacing:'0.1em', marginBottom:14 }}>Aksesi i shpejtë</p>
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(155px,1fr))', gap:10 }}>
+          {[
+            { href:'/company/applications', icon:'📋', label:'Aplikimet',   desc:'Gjej projekte' },
+            { href:'/company/offers',       icon:'💼', label:'Ofertat',     desc:'Menaxho bids' },
+            { href:'/company/messages',     icon:'💬', label:'Mesazhet',    desc:'Komuniko' },
+            { href:'/company/stats',        icon:'📊', label:'Statistikat', desc:'Analytics' },
+            { href:'/company/reviews',      icon:'⭐', label:'Vlerësimet',  desc:'Reputacioni' },
+            { href:'/company/profile',      icon:'🏢', label:'Profili',     desc:'Edito' },
+          ].map(item => (
+            <Link key={item.href} href={item.href} className="quick-link"
+              style={{ padding:'16px', background:'rgba(240,236,228,0.02)', border:'1px solid rgba(240,236,228,0.07)', borderRadius:14, textDecoration:'none', display:'block' }}>
+              <div style={{ fontSize:22, marginBottom:8 }}>{item.icon}</div>
+              <div style={{ fontSize:13, fontWeight:700, color:'#f0ece4', marginBottom:3 }}>{item.label}</div>
+              <div style={{ fontSize:11, color:'rgba(240,236,228,0.35)' }}>{item.desc}</div>
+            </Link>
+          ))}
+        </div>
+      </div>
+
+      {/* Offer Modal */}
+      {offerApp && (
+        <OfferModal
+          application={offerApp as any}
+          companyId={''} 
+          onClose={() => setOfferApp(null)}
+          onSuccess={() => { setOfferApp(null); toast.success('Oferta u dërgua! 🎉', 'Klienti do të njoftohet.') }}
+        />
       )}
-    </div>
+    </PageShell>
   )
 }
